@@ -581,7 +581,8 @@ class TestQdrantIndexer(unittest.TestCase):
             [0.3] * 1536,  # Third item
         ]
 
-        with patch("app.batch_processor.tqdm") as mock_tqdm:
+        with patch("app.indexer.QdrantClient", return_value=mock_qdrant_client), \
+             patch("app.batch_processor.tqdm") as mock_tqdm:
             mock_progress = MagicMock()
             mock_tqdm.return_value.__enter__.return_value = mock_progress
             
@@ -594,6 +595,8 @@ class TestQdrantIndexer(unittest.TestCase):
             
             # Verify progress updates
             assert mock_progress.update.call_count == 1  # 5 items / 10 batch_size = 1 batch
+            # Verify client calls
+            assert mock_qdrant_client.upsert.called
 
     def test_prepare_text_formatting(self):
         """Test text preparation for different metadata types."""
