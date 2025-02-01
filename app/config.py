@@ -2,12 +2,13 @@ import os
 import logging
 from typing import Dict, Optional
 from pydantic import BaseModel
+from dotenv import load_dotenv
 
 
 class Config(BaseModel):
     """Configuration model for the application."""
-    storage_api_token: str
-    storage_api_url: str = "https://connection.keboola.com/v2/storage"
+    keboola_token: str
+    keboola_api_url: str = "https://connection.keboola.com"
     qdrant_host: str = "localhost"
     qdrant_port: int = 55000
     qdrant_collection: str = "keboola_metadata"
@@ -18,9 +19,10 @@ class Config(BaseModel):
     @classmethod
     def from_env(cls) -> "Config":
         """Create configuration from environment variables."""
+        load_dotenv()  # Load .env file
         return cls(
-            storage_api_token=os.getenv("KEBOOLA_TOKEN", ""),
-            storage_api_url=os.getenv("KEBOOLA_API_URL", "https://connection.keboola.com/v2/storage"),
+            keboola_token=os.getenv("KEBOOLA_TOKEN", ""),
+            keboola_api_url=os.getenv("KEBOOLA_API_URL", "https://connection.keboola.com"),
             qdrant_host=os.getenv("QDRANT_HOST", "localhost"),
             qdrant_port=int(os.getenv("QDRANT_PORT", "55000")),
             qdrant_collection=os.getenv("QDRANT_COLLECTION", "keboola_metadata"),
@@ -36,6 +38,7 @@ class Config(BaseModel):
 
 def load_config() -> Dict:
     """Load configuration from environment variables."""
+    load_dotenv()  # Load .env file
     if not os.getenv("KEBOOLA_TOKEN"):
         raise ValueError("KEBOOLA_TOKEN environment variable is required")
 

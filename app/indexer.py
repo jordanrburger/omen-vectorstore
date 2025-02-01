@@ -122,15 +122,23 @@ class QdrantIndexer:
                         logging.info(
                             f"Processing {len(details['columns'])} columns for table {table_id}"
                         )
-                        # Add table_id to each column
-                        columns = details["columns"]
-                        for column in columns:
-                            column["table_id"] = table_id
+                        # Create new column objects with table_id
+                        enriched_columns = []
+                        for column in details["columns"]:
+                            if isinstance(column, str):
+                                # Convert string to dictionary if needed
+                                enriched_column = {"name": column}
+                            else:
+                                # Make a copy to avoid modifying the original
+                                enriched_column = dict(column)
+                            
+                            enriched_column["table_id"] = table_id
                             if "bucket_id" in details:
-                                column["bucket_id"] = details["bucket_id"]
+                                enriched_column["bucket_id"] = details["bucket_id"]
+                            enriched_columns.append(enriched_column)
                         
                         self._index_items(
-                            columns,
+                            enriched_columns,
                             "columns",
                             embedding_provider,
                             batch_size,

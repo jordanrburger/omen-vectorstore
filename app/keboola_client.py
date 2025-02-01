@@ -39,7 +39,7 @@ class KeboolaClient:
         self.client = Client(api_url, token)
         self.state_manager = state_manager or StateManager()
         self.token = token
-        self.url = api_url.rstrip("/")
+        self.url = api_url.rstrip("/") + "/v2/storage"
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -112,11 +112,15 @@ class KeboolaClient:
                 new_state["table_hashes"][table_id] = table_hash
 
                 # Check if table has changed
-                if (
-                    not force_full
-                    and previous_metadata
-                    and state["table_hashes"].get(table_id) == table_hash
-                ):
+                table_changed = (
+                    force_full
+                    or not previous_metadata
+                    or not state.get("table_hashes", {}).get(table_id)  # No previous hash
+                    or state["table_hashes"].get(table_id) != table_hash  # Hash changed
+                )
+
+                # If table hasn't changed, reuse previous metadata
+                if not table_changed:
                     # Reuse previous table metadata
                     metadata["tables"][bucket_id].append(table)
                     if table_id in previous_metadata["table_details"]:
@@ -127,6 +131,7 @@ class KeboolaClient:
                         metadata["columns"][bucket_id][table_id] = previous_metadata["columns"][bucket_id][table_id]
                     continue
 
+                # Table has changed, process all columns as new
                 metadata["tables"][bucket_id].append(table)
 
                 # Get fresh table details and process columns
@@ -138,47 +143,11 @@ class KeboolaClient:
                         enriched_columns = []
                         for column in details["columns"]:
                             column_id = f"{table_id}.{column.get('name', 'unknown')}"
-                            column_hash = self.state_manager.compute_hash(column)
-                            new_state["column_hashes"][column_id] = column_hash
-
-                            # Check if column has changed
-                            column_changed = (
-                                force_full
-                                or not previous_metadata
-                                or state["column_hashes"].get(column_id) != column_hash
-                            )
-
-                            if not column_changed and bucket_id in previous_metadata.get("columns", {}) and table_id in previous_metadata["columns"][bucket_id]:
-                                # Reuse previous column metadata
-                                for prev_column in previous_metadata["columns"][bucket_id][table_id]:
-                                    if prev_column.get("name") == column.get("name"):
-                                        metadata["columns"][bucket_id][table_id].append(prev_column)
-                                        enriched_columns.append(prev_column)
-                                        break
-                                continue
-
-                            # Column has changed or is new, create enriched metadata
+                            # When table has changed, create fresh metadata
                             enriched_column = {}
-                            # First apply new fields from current column data
-                            enriched_column.update(column)
+                            enriched_column.update(column)  # Apply new fields
                             enriched_column["table_id"] = table_id
                             enriched_column["bucket_id"] = bucket_id
-
-                            # Then apply any fields from previous metadata if they exist
-                            if (
-                                not force_full
-                                and previous_metadata
-                                and bucket_id in previous_metadata.get("columns", {})
-                                and table_id in previous_metadata["columns"][bucket_id]
-                            ):
-                                for prev_column in previous_metadata["columns"][bucket_id][table_id]:
-                                    if prev_column.get("name") == column.get("name"):
-                                        # Preserve fields from previous metadata
-                                        for key, value in prev_column.items():
-                                            if key not in ["table_id", "bucket_id", "name"]:
-                                                enriched_column[key] = value
-                                        break
-
                             metadata["columns"][bucket_id][table_id].append(enriched_column)
                             enriched_columns.append(enriched_column)
                             logging.debug(f"Processed column {column_id} for table {table_id}")

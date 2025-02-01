@@ -596,5 +596,207 @@ def test_get_all_transformations_empty(client):
     assert "transformations" in result
     assert len(result["transformations"]) == 0
 
+def test_list_buckets_request_error(client_with_mock_session):
+    """Test error handling in list_buckets when request fails."""
+    client_with_mock_session.session.get.side_effect = requests.exceptions.RequestException("Network error")
+    
+    with pytest.raises(requests.exceptions.RequestException, match="Network error"):
+        client_with_mock_session.list_buckets()
+
+def test_list_buckets_with_deleted(client_with_mock_session):
+    """Test listing buckets including deleted ones."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"id": "bucket1", "isDeleted": False},
+        {"id": "bucket2", "isDeleted": True}
+    ]
+    mock_response.raise_for_status = MagicMock()
+    client_with_mock_session.session.get.return_value = mock_response
+    
+    buckets = client_with_mock_session.list_buckets(include_deleted=True)
+    assert len(buckets) == 2
+    assert any(b["isDeleted"] for b in buckets)
+
+def test_list_tables_request_error(client_with_mock_session):
+    """Test error handling in list_tables when request fails."""
+    client_with_mock_session.session.get.side_effect = requests.exceptions.RequestException("Network error")
+    
+    with pytest.raises(requests.exceptions.RequestException, match="Network error"):
+        client_with_mock_session.list_tables()
+
+def test_list_tables_with_deleted(client_with_mock_session):
+    """Test listing tables including deleted ones."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"id": "table1", "isDeleted": False, "bucket": {"id": "bucket1"}},
+        {"id": "table2", "isDeleted": True, "bucket": {"id": "bucket1"}}
+    ]
+    mock_response.raise_for_status = MagicMock()
+    client_with_mock_session.session.get.return_value = mock_response
+    
+    tables = client_with_mock_session.list_tables(include_deleted=True)
+    assert "bucket1" in tables
+    assert len(tables["bucket1"]) == 2
+    assert any(t["isDeleted"] for t in tables["bucket1"])
+
+def test_list_tables_specific_bucket(client_with_mock_session):
+    """Test listing tables for a specific bucket."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"id": "table1", "bucket": {"id": "bucket1"}},
+        {"id": "table2", "bucket": {"id": "bucket2"}}
+    ]
+    mock_response.raise_for_status = MagicMock()
+    client_with_mock_session.session.get.return_value = mock_response
+    
+    tables = client_with_mock_session.list_tables(bucket_id="bucket1")
+    assert "bucket1" in tables
+    assert len(tables["bucket1"]) == 1
+    assert tables["bucket1"][0]["id"] == "table1"
+
+def test_list_configurations_request_error(client_with_mock_session):
+    """Test error handling in list_configurations when request fails."""
+    client_with_mock_session.session.get.side_effect = requests.exceptions.RequestException("Network error")
+    
+    with pytest.raises(requests.exceptions.RequestException, match="Network error"):
+        client_with_mock_session.list_configurations()
+
+def test_list_configurations_with_versions(client_with_mock_session):
+    """Test listing configurations with version history."""
+    # Mock responses for components, configs, versions, and rows
+    mock_components_response = MagicMock()
+    mock_components_response.json.return_value = [{"id": "component1"}]
+    mock_components_response.raise_for_status = MagicMock()
+    
+    mock_configs_response = MagicMock()
+    mock_configs_response.json.return_value = [{"id": "config1"}]
+    mock_configs_response.raise_for_status = MagicMock()
+    
+    mock_versions_response = MagicMock()
+    mock_versions_response.json.return_value = [{"version": 1}]
+    mock_versions_response.raise_for_status = MagicMock()
+    
+    mock_rows_response = MagicMock()
+    mock_rows_response.json.return_value = [{"id": "row1"}]
+    mock_rows_response.raise_for_status = MagicMock()
+    
+    client_with_mock_session.session.get.side_effect = [
+        mock_components_response,
+        mock_configs_response,
+        mock_versions_response,
+        mock_rows_response
+    ]
+    
+    configs = client_with_mock_session.list_configurations(include_versions=True)
+    assert len(configs) == 1
+    assert "versions" in configs[0]
+    assert "rows" in configs[0]
+    assert configs[0]["componentId"] == "component1"
+
+def test_extract_metadata_column_unchanged(client):
+    """Test handling of unchanged column metadata."""
+    # Mock state manager with existing state
+    previous_state = {
+        "bucket_hashes": {"bucket1": "hash1"},
+        "table_hashes": {"table1": "hash1"},
+        "column_hashes": {"table1.col1": "hash1"}
+    }
+    previous_metadata = {
+        "buckets": [{"id": "bucket1"}],
+        "tables": {"bucket1": [{"id": "table1"}]},
+        "table_details": {"table1": {"columns": [{"name": "col1", "type": "string"}]}},
+        "columns": {"bucket1": {"table1": [{"name": "col1", "type": "string", "description": "preserved"}]}}
+    }
+    
+    client.state_manager.load_extraction_state.return_value = previous_state
+    client.state_manager.load_metadata.return_value = previous_metadata
+    
+    # Mock new column data (same as previous)
+    mock_table_details = {
+        "columns": [
+            {"name": "col1", "type": "string"}
+        ]
+    }
+    
+    # Setup mocks
+    client.list_buckets_paginated = MagicMock(return_value=[{"id": "bucket1"}])
+    client.list_tables_paginated = MagicMock(return_value=[{"id": "table1"}])
+    client.get_table_details = MagicMock(return_value=mock_table_details)
+    client.client.components.list.return_value = []
+    
+    # Use same hashes to prevent updates
+    client.state_manager.compute_hash.return_value = "hash1"
+    
+    metadata = client.extract_metadata()
+    
+    # Verify column metadata was preserved
+    assert "columns" in metadata
+    assert "bucket1" in metadata["columns"]
+    assert "table1" in metadata["columns"]["bucket1"]
+    assert len(metadata["columns"]["bucket1"]["table1"]) == 1
+    assert metadata["columns"]["bucket1"]["table1"][0]["description"] == "preserved"
+
+def test_extract_metadata_config_version_error(client):
+    """Test handling of configuration version fetch errors."""
+    # Mock state manager
+    client.state_manager.load_extraction_state.return_value = {}
+    client.state_manager.load_metadata.return_value = None
+    
+    # Mock components and configurations
+    mock_component = {"id": "component1"}
+    mock_config = {"id": "config1", "name": "Test Config"}
+    
+    client.client.components.list.return_value = [mock_component]
+    client.list_configurations_paginated = MagicMock(return_value=[mock_config])
+    
+    # Mock version fetch error
+    def mock_get(*args, **kwargs):
+        if "versions" in args[0]:
+            raise requests.exceptions.RequestException("Version error")
+        response = MagicMock()
+        response.json.return_value = []
+        return response
+    
+    client.session.get = MagicMock(side_effect=mock_get)
+    
+    metadata = client.extract_metadata()
+    
+    # Verify config was still processed despite version error
+    assert "configurations" in metadata
+    assert "component1" in metadata["configurations"]
+    assert len(metadata["configurations"]["component1"]) == 1
+    assert metadata["configurations"]["component1"][0]["id"] == "config1"
+
+def test_extract_metadata_config_row_error(client):
+    """Test handling of configuration row fetch errors."""
+    # Mock state manager
+    client.state_manager.load_extraction_state.return_value = {}
+    client.state_manager.load_metadata.return_value = None
+    
+    # Mock components and configurations
+    mock_component = {"id": "component1"}
+    mock_config = {"id": "config1", "name": "Test Config"}
+    
+    client.client.components.list.return_value = [mock_component]
+    client.list_configurations_paginated = MagicMock(return_value=[mock_config])
+    
+    # Mock row fetch error
+    def mock_get(*args, **kwargs):
+        if "rows" in args[0]:
+            raise requests.exceptions.RequestException("Row error")
+        response = MagicMock()
+        response.json.return_value = []
+        return response
+    
+    client.session.get = MagicMock(side_effect=mock_get)
+    
+    metadata = client.extract_metadata()
+    
+    # Verify config was still processed despite row error
+    assert "configurations" in metadata
+    assert "component1" in metadata["configurations"]
+    assert len(metadata["configurations"]["component1"]) == 1
+    assert metadata["configurations"]["component1"][0]["id"] == "config1"
+
 if __name__ == "__main__":
     unittest.main()
