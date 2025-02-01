@@ -1,3 +1,4 @@
+import unittest
 from unittest.mock import MagicMock, patch
 
 from qdrant_client.http.exceptions import UnexpectedResponse
@@ -6,7 +7,7 @@ from qdrant_client.http.models import ScoredPoint
 from app.indexer import QdrantIndexer
 
 
-class TestQdrantIndexer:
+class TestQdrantIndexer(unittest.TestCase):
     def test_ensure_collection_skips_existing(self):
         mock_qdrant_client = MagicMock()
         mock_collection = MagicMock()
@@ -105,18 +106,31 @@ class TestQdrantIndexer:
             return_value=mock_qdrant_client,
         ):
             indexer = QdrantIndexer()
-            item = {
+            
+            # Test table metadata
+            table_item = {
                 "name": "test",
                 "description": "test desc",
                 "type": "test type",
                 "tags": ["tag1", "tag2"],
             }
-            text = indexer._prepare_text_for_embedding(item)
-
-            assert "Name: test" in text
-            assert "Description: test desc" in text
-            assert "Type: test type" in text
-            assert "Tags: tag1, tag2" in text
+            text = indexer._prepare_text_for_embedding(table_item, "tables")
+            self.assertEqual(
+                text,
+                "Name: test | Description: test desc | Type: test type | Tags: tag1, tag2"
+            )
+            
+            # Test column metadata
+            column_item = {
+                "name": "test_column",
+                "type": "INTEGER",
+                "description": "test column desc",
+            }
+            text = indexer._prepare_text_for_embedding(column_item, "columns")
+            self.assertEqual(
+                text,
+                "Name: test_column | Type: INTEGER | Description: test column desc"
+            )
 
     def test_generate_point_id(self):
         mock_qdrant_client = MagicMock()
