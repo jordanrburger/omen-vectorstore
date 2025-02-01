@@ -13,9 +13,10 @@ services:
       - QDRANT__STORAGE__STORAGE_SIZE_MB=4096  # Allocate 4GB for storage
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped
 
 volumes:
