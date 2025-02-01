@@ -1,7 +1,8 @@
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 import argparse
 from typing import Dict, List
+import logging
 
 from app.main import (
     get_embedding_provider,
@@ -11,6 +12,7 @@ from app.main import (
     search_command,
     main
 )
+from app.batch_processor import BatchConfig
 from app.config import Config
 from app.vectorizer import OpenAIProvider, SentenceTransformerProvider
 from app.keboola_client import KeboolaClient
@@ -157,12 +159,21 @@ def test_index_command(mock_state_manager, mock_client, mock_indexer, mock_confi
     mock_client_instance.list_buckets.return_value = []
     mock_client_instance.list_tables.return_value = {}
     mock_client_instance.list_configurations.return_value = []
-    
+
     mock_indexer_instance = Mock()
     mock_indexer.return_value = mock_indexer_instance
-    
-    index_command(mock_config)
-    
+
+    # Create a batch config for testing
+    batch_config = BatchConfig(
+        batch_size=10,
+        max_retries=3,
+        initial_retry_delay=1.0
+    )
+
+    index_command(mock_config, batch_config)
+
+    # Verify the expected calls
+    mock_state_manager.assert_called_once()
     mock_client.assert_called_once()
     mock_indexer.assert_called_once()
     mock_indexer_instance.index_metadata.assert_called_once()
@@ -217,17 +228,23 @@ def test_main_search_command(mock_config, mock_args):
         command="search",
         query="test query",
         type=None,
+        component_type=None,
+        table_id=None,
+        stage=None,
         limit=10
     )
     mock_config.from_env.return_value = Mock()
-    
+
     with patch('app.main.search_command') as mock_search:
         main()
         mock_search.assert_called_once_with(
             mock_config.from_env.return_value,
             "test query",
-            None,
-            10
+            None,  # type
+            None,  # component_type
+            None,  # table_id
+            None,  # stage
+            10    # limit
         )
 
 @patch('argparse.ArgumentParser.parse_args')
