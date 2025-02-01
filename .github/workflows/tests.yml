@@ -23,11 +23,11 @@ jobs:
           QDRANT__STORAGE__WAL_CAPACITY_MB: 512
           QDRANT__STORAGE__STORAGE_SIZE_MB: 4096
         options: >-
-          --health-cmd "curl -f http://localhost:6333/healthz"
-          --health-interval 5s
+          --health-cmd "wget -q -O - http://localhost:6333/healthz || exit 1"
+          --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-          --health-start-period 5s
+          --health-start-period 10s
 
     steps:
     - uses: actions/checkout@v3
