@@ -213,6 +213,63 @@ class QdrantIndexer:
                 fields.append(f"Type: {item['type']}")
             if "description" in item:
                 fields.append(f"Description: {item['description']}")
+            
+            # Add statistics if available
+            if "statistics" in item:
+                stats = item["statistics"]
+                if item.get("type", "").upper() in ("INTEGER", "NUMERIC", "DECIMAL", "FLOAT", "DOUBLE"):
+                    # Numeric column statistics
+                    stat_parts = []
+                    if "min" in stats:
+                        stat_parts.append(f"min={stats['min']}")
+                    if "max" in stats:
+                        stat_parts.append(f"max={stats['max']}")
+                    if "avg" in stats:
+                        stat_parts.append(f"avg={stats['avg']}")
+                    if "unique_count" in stats:
+                        stat_parts.append(f"unique={stats['unique_count']}")
+                    if stat_parts:
+                        fields.append(f"Statistics: {', '.join(stat_parts)}")
+                else:
+                    # String/other column statistics
+                    stat_parts = []
+                    if "unique_count" in stats:
+                        stat_parts.append(f"unique={stats['unique_count']}")
+                    if "most_common" in stats and stats["most_common"]:
+                        stat_parts.append(f"most_common={','.join(stats['most_common'][:3])}")
+                    if stat_parts:
+                        fields.append(f"Statistics: {', '.join(stat_parts)}")
+            
+            # Add quality metrics if available
+            if "quality_metrics" in item:
+                metrics = item["quality_metrics"]
+                quality_parts = []
+                
+                # Add completeness and validity
+                if "completeness" in metrics:
+                    quality_parts.append(f"{int(metrics['completeness'] * 100)}% complete")
+                if "validity" in metrics:
+                    quality_parts.append(f"{int(metrics['validity'] * 100)}% valid")
+                
+                # Add range check for numeric columns
+                if "range_check" in metrics:
+                    range_check = metrics["range_check"]
+                    quality_parts.append(
+                        f"Valid range: {range_check['min_valid']}-{range_check['max_valid']}"
+                    )
+                
+                # Add standardization info
+                if "standardization" in metrics:
+                    standard = metrics["standardization"]["standard"]
+                    quality_parts.append(f"Standard: {standard}")
+                
+                # Add common issues
+                if "common_issues" in metrics and metrics["common_issues"]:
+                    quality_parts.append(f"Issues: {', '.join(metrics['common_issues'])}")
+                
+                if quality_parts:
+                    fields.append(f"Quality: {', '.join(quality_parts)}")
+            
             return " | ".join(fields)
         else:
             # Default handling for other metadata types
