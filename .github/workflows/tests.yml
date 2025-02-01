@@ -40,6 +40,7 @@ jobs:
 
     - name: Run tests with coverage
       env:
+        PYTHONPATH: ${{ github.workspace }}
         QDRANT_HOST: localhost
         QDRANT_PORT: 6333
         KEBOOLA_TOKEN: dummy-token
