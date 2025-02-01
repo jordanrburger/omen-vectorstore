@@ -11,6 +11,7 @@ from app.vectorizer import (
     OpenAIProvider,
     SentenceTransformerProvider,
 )
+from app.batch_processor import BatchConfig
 
 
 def get_embedding_provider(config: Config) -> EmbeddingProvider:
@@ -97,7 +98,7 @@ def search_metadata(
         raise
 
 
-def index_command(config: Config):
+def index_command(config: Config, batch_config: BatchConfig):
     """Command to extract and index metadata."""
     # Initialize components
     state_manager = StateManager()
@@ -108,9 +109,8 @@ def index_command(config: Config):
     )
     embedding_provider = get_embedding_provider(config)
     indexer = QdrantIndexer(
-        host=config.qdrant_host,
-        port=config.qdrant_port,
         collection_name=config.qdrant_collection,
+        batch_config=batch_config
     )
 
     # Extract and index metadata
@@ -123,9 +123,7 @@ def search_command(config: Config, query: str, metadata_type: Optional[str] = No
     """Command to search indexed metadata."""
     embedding_provider = get_embedding_provider(config)
     indexer = QdrantIndexer(
-        host=config.qdrant_host,
-        port=config.qdrant_port,
-        collection_name=config.qdrant_collection,
+        collection_name=config.qdrant_collection
     )
 
     results = search_metadata(
@@ -174,6 +172,9 @@ def main():
 
     # Index command
     index_parser = subparsers.add_parser("index", help="Extract and index metadata")
+    index_parser.add_argument("--batch-size", type=int, default=10, help="Size of batches for processing")
+    index_parser.add_argument("--max-retries", type=int, default=3, help="Maximum number of retries for failed operations")
+    index_parser.add_argument("--retry-delay", type=float, default=1.0, help="Initial delay between retries in seconds")
 
     # Search command
     search_parser = subparsers.add_parser("search", help="Search indexed metadata")
@@ -188,7 +189,13 @@ def main():
     logging.info("Configuration loaded")
 
     if args.command == "index":
-        index_command(config)
+        # Create batch config from arguments
+        batch_config = BatchConfig(
+            batch_size=args.batch_size,
+            max_retries=args.max_retries,
+            initial_retry_delay=args.retry_delay
+        )
+        index_command(config, batch_config)
     elif args.command == "search":
         search_command(config, args.query, args.type, args.limit)
     else:

@@ -68,101 +68,88 @@ Follow these steps to get up and running quickly:
 
 5. **Extract and Index Metadata**:
    ```bash
-   # Extract and index in one step
-   python3 -m app.main extract --and-index
+   # Extract and index with default settings
+   python3 -m app.main index
+
+   # Extract and index with custom batch processing settings
+   python3 -m app.main index \
+     --batch-size 20 \      # Number of items to process in each batch (default: 10)
+     --max-retries 5 \      # Maximum retry attempts for failed operations (default: 3)
+     --retry-delay 2.0      # Initial delay between retries in seconds (default: 1.0)
    ```
 
 6. **Run Your First Search**:
-   ```python
-   from app.vectorizer import OpenAIProvider
-   from app.indexer import QdrantIndexer
-   from app.config import Config
+   ```bash
+   # Basic search with default settings
+   python3 -m app.main search "Find tables containing Zendesk ticket data"
 
-   # Initialize components
-   config = Config.from_env()
-   embedding_provider = OpenAIProvider(
-       api_key=config.openai_api_key,
-       model="text-embedding-ada-002"
-   )
-   indexer = QdrantIndexer()
-
-   # Search for tables
-   results = indexer.search_metadata(
-       query="Find tables containing Zendesk ticket data",
-       embedding_provider=embedding_provider,
-       metadata_type="tables",
-       limit=5
-   )
-
-   # Print results
-   for result in results:
-       print(f"Score: {result['score']}")
-       print(f"Type: {result['metadata_type']}")
-       print(f"Metadata: {result['metadata']}")
-       print("---")
+   # Search with type filtering and custom limit
+   python3 -m app.main search "Find transformations that clean data" \
+     --type transformations \
+     --limit 5
    ```
+
+## CLI Usage
+
+The application provides a command-line interface with two main commands:
+
+### Index Command
+```bash
+python3 -m app.main index [options]
+```
+
+Options:
+- `--batch-size`: Number of items to process in each batch (default: 10)
+- `--max-retries`: Maximum number of retry attempts for failed operations (default: 3)
+- `--retry-delay`: Initial delay between retries in seconds (default: 1.0)
+
+The indexing process includes:
+- Extracting metadata from Keboola Storage API
+- Converting metadata to embeddings
+- Storing in Qdrant with optimized batch processing
+- Automatic retries for failed operations
+
+### Search Command
+```bash
+python3 -m app.main search <query> [options]
+```
+
+Options:
+- `--type`: Filter by metadata type (buckets, tables, configurations)
+- `--limit`: Maximum number of results to return (default: 10)
+
+Search results include:
+- Relevance score
+- Metadata type
+- ID and name
+- Description (if available)
+- Additional type-specific metadata
 
 ## Advanced Usage
 
 ### Search Operations
 
-The system supports various types of searches:
+The system supports various types of semantic searches:
 
 1. **General Metadata Search**:
-   ```python
-   results = indexer.search_metadata(
-       query="Show me tables related to Slack data",
-       embedding_provider=embedding_provider,
-       limit=5
-   )
+   ```bash
+   # Search across all metadata types
+   python3 -m app.main search "Show me data related to Slack messages"
    ```
 
 2. **Type-Specific Search**:
-   ```python
+   ```bash
    # Search only tables
-   results = indexer.search_metadata(
-       query="Find tables with customer data",
-       embedding_provider=embedding_provider,
-       metadata_type="tables",
-       limit=5
-   )
+   python3 -m app.main search "Find tables with customer data" --type tables
 
-   # Search only transformations
-   results = indexer.search_metadata(
-       query="Find transformations that clean data",
-       embedding_provider=embedding_provider,
-       metadata_type="transformations",
-       limit=5
-   )
+   # Search only configurations
+   python3 -m app.main search "Find transformations that process Zendesk data" --type configurations
    ```
 
-3. **Column Search**:
-   ```python
-   # Find similar columns across tables
-   results = indexer.find_similar_columns(
-       column_name="email",
-       table_id="in.c-main.customers",
-       embedding_provider=embedding_provider,
-       limit=5
-   )
-
-   # Find columns in a specific table
-   results = indexer.find_table_columns(
-       table_id="in.c-main.customers",
-       query="Find email columns",
-       embedding_provider=embedding_provider,
-       limit=5
-   )
-   ```
-
-4. **Transformation Search**:
-   ```python
-   # Find transformations related to a table
-   results = indexer.find_related_transformations(
-       table_id="in.c-main.customers",
-       embedding_provider=embedding_provider,
-       limit=5
-   )
+3. **Limiting Results**:
+   ```bash
+   # Get top 5 most relevant results
+   python3 -m app.main search "Find OAuth authentication configurations" --limit 5
    ```
 
 ### Understanding Search Results
@@ -170,24 +157,47 @@ The system supports various types of searches:
 Search results include rich metadata based on the type:
 
 1. **Table Results**:
-   - Table name and ID
-   - Description and tags
-   - Column information
-   - Row counts and data sizes
+   - Table ID and name
+   - Description (if available)
+   - Bucket information
+   - Stage (in/out)
 
-2. **Column Results**:
-   - Column name and type
+2. **Configuration Results**:
+   - Configuration ID and name
+   - Component details
    - Description
-   - Statistics (min, max, avg for numeric; unique counts for all)
-   - Quality metrics (completeness, validity)
-   - Parent table information
+   - Version information
+   - Creation and modification timestamps
 
-3. **Transformation Results**:
-   - Transformation name and type
-   - Description
-   - Code blocks and their operations
-   - Input/output dependencies
-   - Runtime information
+3. **Bucket Results**:
+   - Bucket ID and name
+   - Stage information
+   - Description (if available)
+
+### Batch Processing
+
+The system supports optimized batch processing with configurable parameters:
+
+1. **Batch Size**:
+   - Controls the number of items processed in each batch
+   - Default: 10 items
+   - Adjust based on available memory and API rate limits
+   ```bash
+   python3 -m app.main index --batch-size 20
+   ```
+
+2. **Retry Mechanism**:
+   - Automatic retries for failed operations
+   - Exponential backoff strategy
+   - Configurable maximum retries and initial delay
+   ```bash
+   python3 -m app.main index --max-retries 5 --retry-delay 2.0
+   ```
+
+3. **State Management**:
+   - Tracks processed items
+   - Supports incremental updates
+   - Maintains processing state across runs
 
 ## Development
 
@@ -262,3 +272,27 @@ Common issues and solutions:
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Development Status
+
+### Completed Features
+- ✅ Basic metadata extraction from Keboola Storage API
+- ✅ Optimized batch processing with configurable parameters
+- ✅ Semantic search across all metadata types
+- ✅ CLI interface for indexing and searching
+- ✅ Support for OpenAI and SentenceTransformer embedding providers
+- ✅ Proper error handling and retries
+- ✅ State management for incremental updates
+
+### In Progress
+- 🔄 Enhanced metadata extraction for transformations
+- 🔄 Improved column-level search capabilities
+- 🔄 Advanced filtering options for search results
+
+### Planned Features
+- 📋 Real-time metadata updates
+- 📋 Advanced recommendation system
+- 📋 Custom scoring functions for search results
+- 📋 Integration with additional embedding providers
+- 📋 Enhanced documentation coverage
+- 📋 Performance optimization for large-scale deployments
