@@ -93,6 +93,8 @@ class TestColumnMetadata(unittest.TestCase):
                 "type": "VARCHAR",
                 "basetype": "STRING",
                 "description": "Customer name",
+                "table_id": "table1",
+                "bucket_id": "bucket1"
             }
         )
 

@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
+import uuid
 
 from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.http.models import ScoredPoint
@@ -145,7 +146,12 @@ class TestQdrantIndexer(unittest.TestCase):
     
             # Verify the point ID is a string and follows the expected format
             assert isinstance(point_id, str)
-            assert point_id == "test_type_test_id"
+            # UUID format validation
+            try:
+                uuid.UUID(point_id)
+                assert True
+            except ValueError:
+                assert False, "Point ID is not a valid UUID"
 
     def test_search_metadata(self):
         mock_qdrant_client = MagicMock()

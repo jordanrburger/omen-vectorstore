@@ -65,13 +65,22 @@ class QdrantIndexer:
         total_items = (
             len(metadata.get("buckets", []))
             + sum(len(tables) for tables in metadata.get("tables", {}).values())
-            + sum(
-                len(columns)
-                for bucket_columns in metadata.get("columns", {}).values()
-                for columns in bucket_columns.values()
-            )
             + len(metadata.get("configurations", []))
         )
+        
+        if "table_details" in metadata:
+            total_items += sum(
+                len(details.get("columns", []))
+                for details in metadata["table_details"].values()
+            )
+        
+        if "transformations" in metadata:
+            total_items += len(metadata["transformations"])
+            # Add blocks from transformations
+            total_items += sum(
+                len(t.get("blocks", []))
+                for t in metadata["transformations"].values()
+            )
         
         logging.info(
             f"Starting indexing of {total_items} total items "
@@ -106,23 +115,81 @@ class QdrantIndexer:
                         {"bucket_id": bucket_id},
                     )
             
-            elif metadata_type == "columns":
-                # Handle columns dictionary (bucket_id -> table_id -> list of columns)
-                for bucket_id, bucket_columns in items.items():
-                    for table_id, columns in bucket_columns.items():
+            elif metadata_type == "table_details":
+                # Handle table details and their columns
+                for table_id, details in items.items():
+                    if "columns" in details:
                         logging.info(
-                            f"Processing {len(columns)} columns for table {table_id}"
+                            f"Processing {len(details['columns'])} columns for table {table_id}"
                         )
+                        # Add table_id to each column
+                        columns = details["columns"]
+                        for column in columns:
+                            column["table_id"] = table_id
+                            if "bucket_id" in details:
+                                column["bucket_id"] = details["bucket_id"]
+                        
                         self._index_items(
                             columns,
-                            metadata_type,
+                            "columns",
                             embedding_provider,
                             batch_size,
-                            {
-                                "bucket_id": bucket_id,
-                                "table_id": table_id,
-                            },
+                            {"table_id": table_id},
                         )
+            
+            elif metadata_type == "transformations":
+                # Handle transformations and their blocks
+                for transformation_id, transformation in items.items():
+                    logging.info(f"Processing transformation {transformation_id}")
+                    
+                    # Prepare texts for embedding
+                    texts = [self._prepare_transformation_text(transformation)]
+                    
+                    # Add texts for each block
+                    if "blocks" in transformation:
+                        for block in transformation["blocks"]:
+                            texts.append(self._prepare_block_text(block, transformation_id))
+                    
+                    # Get embeddings for all texts
+                    embeddings = embedding_provider.embed(texts)
+                    
+                    # Create points for transformation and blocks
+                    points = []
+                    
+                    # Add transformation point
+                    points.append(
+                        models.PointStruct(
+                            id=self._generate_point_id("transformations", {"id": transformation_id}),
+                            vector=embeddings[0],
+                            payload={
+                                "metadata_type": "transformations",
+                                "raw_metadata": transformation,
+                            }
+                        )
+                    )
+                    
+                    # Add points for each block
+                    for i, block in enumerate(transformation.get("blocks", []), 1):
+                        points.append(
+                            models.PointStruct(
+                                id=self._generate_point_id(
+                                    "transformation_blocks",
+                                    {"id": f"{transformation_id}_block_{i}"}
+                                ),
+                                vector=embeddings[i],
+                                payload={
+                                    "metadata_type": "transformation_blocks",
+                                    "transformation_id": transformation_id,
+                                    "raw_metadata": block,
+                                }
+                            )
+                        )
+                    
+                    # Upsert all points
+                    self.client.upsert(
+                        collection_name=self.collection_name,
+                        points=points,
+                    )
             
             elif metadata_type == "configurations":
                 # Handle configurations as a list
@@ -485,61 +552,76 @@ class QdrantIndexer:
                     
         return results
 
-    def _prepare_transformation_text(self, transformation: dict) -> str:
-        """
-        Prepare text representation of a transformation for embedding.
-        
-        Args:
-            transformation: Dictionary containing transformation metadata.
-            
-        Returns:
-            str: Text representation of the transformation.
-        """
-        parts = [
-            f"Name: {transformation['name']}",
-            f"Type: {transformation['type']}",
-        ]
-        
+    def _prepare_transformation_text(self, transformation: Dict) -> str:
+        """Convert a transformation into a text representation for embedding."""
+        fields = []
+        if "name" in transformation:
+            fields.append(f"Name: {transformation['name']}")
+        if "type" in transformation:
+            fields.append(f"Type: {transformation['type']}")
         if "description" in transformation:
-            parts.append(f"Description: {transformation['description']}")
-            
+            fields.append(f"Description: {transformation['description']}")
+        
+        # Add dependencies
+        dependencies = []
         if "dependencies" in transformation:
             deps = transformation["dependencies"]
-            deps_parts = []
             if "requires" in deps:
-                deps_parts.append(f"Requires {', '.join(deps['requires'])}")
+                dependencies.append(f"Requires {', '.join(deps['requires'])}")
             if "produces" in deps:
-                deps_parts.append(f"Produces {', '.join(deps['produces'])}")
-            if deps_parts:
-                parts.append(f"Dependencies: {'; '.join(deps_parts)}")
-                
+                dependencies.append(f"Produces {', '.join(deps['produces'])}")
+        if dependencies:
+            fields.append(f"Dependencies: {'; '.join(dependencies)}")
+        
+        # Add runtime info
+        runtime = []
         if "runtime" in transformation:
-            runtime = transformation["runtime"]
-            parts.append(f"Runtime: {runtime.get('backend', 'unknown')}, {runtime.get('memory', 'unknown')} memory")
-            
-        return " | ".join(parts)
+            runtime_info = transformation["runtime"]
+            if isinstance(runtime_info, dict):
+                if "backend" in runtime_info:
+                    runtime.append(runtime_info["backend"])
+                if "memory" in runtime_info:
+                    runtime.append(f"{runtime_info['memory']} memory")
+            else:
+                runtime.append(str(runtime_info))
+        if runtime:
+            fields.append(f"Runtime: {', '.join(runtime)}")
+        
+        return " | ".join(fields)
 
-    def _prepare_block_text(self, block: dict, transformation_id: str) -> str:
-        """
-        Prepare text representation of a transformation block for embedding.
+    def _prepare_block_text(self, block: Dict, transformation_id: str) -> str:
+        """Convert a transformation block into a text representation for embedding."""
+        fields = []
         
-        Args:
-            block: Dictionary containing block metadata.
-            transformation_id: ID of the parent transformation.
-            
-        Returns:
-            str: Text representation of the block.
-        """
-        parts = [f"Block: {block['name']}"]
+        # Add block name/type
+        if "name" in block:
+            fields.append(f"Block: {block['name']}")
+        elif "type" in block:
+            fields.append(f"Block: {block['type']}")
         
+        # Add inputs
         if "inputs" in block:
-            inputs = [f"{i['destination']} from {i['source']}" for i in block["inputs"]]
-            parts.append(f"Inputs: {', '.join(inputs)}")
-            
+            input_texts = []
+            for input_item in block["inputs"]:
+                if isinstance(input_item, dict):
+                    input_texts.append(f"{input_item.get('destination', '')} from {input_item.get('source', '')}")
+                else:
+                    input_texts.append(str(input_item))
+            if input_texts:
+                fields.append(f"Inputs: {', '.join(input_texts)}")
+        
+        # Add outputs
         if "outputs" in block:
-            outputs = [f"{o['source']} to {o['destination']}" for o in block["outputs"]]
-            parts.append(f"Outputs: {', '.join(outputs)}")
-            
+            output_texts = []
+            for output_item in block["outputs"]:
+                if isinstance(output_item, dict):
+                    output_texts.append(f"{output_item.get('source', '')} to {output_item.get('destination', '')}")
+                else:
+                    output_texts.append(str(output_item))
+            if output_texts:
+                fields.append(f"Outputs: {', '.join(output_texts)}")
+        
+        # Add code/script content
         if "code" in block:
             # Extract key operations from code without including full code
             code_summary = []
@@ -570,9 +652,9 @@ class QdrantIndexer:
                     code_summary.append(desc)
                     
             if code_summary:
-                parts.append(f"Code: {', '.join(code_summary)}")
+                fields.append(f"Code: {', '.join(code_summary)}")
         
-        return " | ".join(parts)
+        return " | ".join(fields)
 
     def _index_transformation_metadata(self, metadata: dict, embedding_provider: EmbeddingProvider) -> None:
         """
