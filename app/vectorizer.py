@@ -44,20 +44,18 @@ class SentenceTransformerProvider(EmbeddingProvider):
 
 
 class OpenAIProvider(EmbeddingProvider):
-    """OpenAI API based embedding provider."""
+    """OpenAI embedding provider."""
 
-    def __init__(
-        self,
-        api_key: str,
-        model: str = "text-embedding-3-small",
-    ):
-        """Initialize the provider with API key and model."""
+    def __init__(self, api_key: str, model: str = "text-embedding-3-small"):
+        """Initialize the OpenAI provider with API key and model."""
         self.client = OpenAI(api_key=api_key)
         self.model = model
-        logging.info(f"Initialized OpenAI provider with model {model}")
+        logging.info("Initialized OpenAI provider with model: %s", model)
 
     def embed(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using the OpenAI API."""
+        if isinstance(texts, str):
+            texts = [texts]
         try:
             response = self.client.embeddings.create(
                 model=self.model,

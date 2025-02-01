@@ -20,10 +20,11 @@ The current metadata extraction system:
   - [x] Include column statistics (min, max, avg values)
   - [x] Add column quality metrics
   - [ ] Track column dependencies and lineage
-- [ ] Add support for transformation metadata
-  - SQL queries and dependencies
-  - Python/R code blocks
-  - Input/output mappings
+- [x] Add support for transformation metadata
+  - [x] Python/R code blocks
+  - [x] Input/output mappings
+  - [x] Block-level code analysis
+  - [x] Dependencies tracking
 - [ ] Add support for orchestration metadata
   - Task dependencies
   - Schedule information
@@ -98,7 +99,11 @@ The current metadata extraction system:
    - [x] Column search functionality
    - [x] Column relationship queries
    - [x] Column statistics and quality metrics
-2. [ ] Add transformation metadata support
+2. [x] Add transformation metadata support
+   - [x] Extract transformation details
+   - [x] Index code blocks and dependencies
+   - [x] Enable semantic search over transformations
+   - [x] Support finding related transformations
 3. [ ] Improve table metadata with statistics
 4. [ ] Add basic validation
 

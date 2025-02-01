@@ -7,11 +7,14 @@ This project indexes metadata from a Keboola project using the Keboola Storage A
 The system performs the following steps:
 
 1. **Metadata Extraction**
-   - Fetch buckets, tables, and table details from Keboola using the [Keboola SAPI Python Client](https://github.com/keboola/sapi-python-client) or directly with the API.
+   - Fetch buckets, tables, and table details from Keboola using the [Keboola SAPI Python Client](https://github.com/keboola/sapi-python-client).
+   - Extract column metadata including statistics and quality metrics.
+   - Extract transformation metadata including code blocks and dependencies.
 
 2. **Metadata Processing and Vectorization**
    - Normalize and combine metadata fields (e.g., title, description, tags) into documents.
-   - Convert documents into embeddings using an embedding abstraction that supports multiple providers (e.g., SentenceTransformer and OpenAI).
+   - Convert documents into embeddings using OpenAI's text-embedding-ada-002 model.
+   - Process transformation code blocks to extract key operations and dependencies.
 
 3. **Indexing into Qdrant**
    - Connect to a locally running Qdrant instance (dashboard: [http://localhost:55000/dashboard](http://localhost:55000/dashboard)).
@@ -23,273 +26,239 @@ The system performs the following steps:
    - Support filtering by metadata type (buckets, tables, configurations, etc.).
    - Return semantically similar results ranked by relevance score.
 
-## Environment and Installation
+## Quick Start Guide
 
-### Prerequisites
+Follow these steps to get up and running quickly:
 
-1. **Python 3.11+** is required.
-2. **Docker** and **Docker Compose** for running Qdrant.
-
-### Setup
-
-1. **Start Qdrant**:
-   ```bash
-   # Create data directory for Qdrant
-   mkdir -p qdrant_data
-   
-   # Start Qdrant with optimized settings
-   docker-compose up -d qdrant
-   
-   # Check logs if needed
-   docker-compose logs -f qdrant
-   
-   # Stop Qdrant
-   docker-compose down
-   
-   # Remove all data and start fresh
-   docker-compose down -v
-   rm -rf qdrant_data/*
-   ```
-
-2. **Install Dependencies**:
-   ```bash
-   # For production
-   pip3 install -r requirements.txt
-
-   # For development (includes testing tools)
-   pip3 install -r requirements-dev.txt
-   ```
-
-### Configuration
-
-1. **Copy the environment template**:
-   ```bash
-   cp .env.template .env
-   ```
-
-2. **Edit the `.env` file** with your credentials:
-   ```env
-   # Required
-   KEBOOLA_TOKEN=your-keboola-storage-api-token
-   KEBOOLA_API_URL=https://connection.keboola.com
-
-   # Optional - defaults shown
-   SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2
-   QDRANT_HOST=localhost
-   QDRANT_PORT=55000
-   QDRANT_COLLECTION=keboola_metadata
-   ```
-
-## Usage
-
-The project provides a command-line interface (CLI) for all operations:
-
-### 1. Extract and Index Metadata
-
-```bash
-# Extract and index metadata in one step
-python3 -m app.main extract --and-index
-
-# Or do it separately:
-python3 -m app.main extract  # Extract only
-python3 -m app.main index    # Index only
-```
-
-### 2. Search Metadata
-
-You can search metadata in several ways:
-
-```python
-from app.vectorizer import SentenceTransformerProvider
-from app.indexer import QdrantIndexer
-
-# Initialize components
-embedding_provider = SentenceTransformerProvider()
-indexer = QdrantIndexer()
-
-# Search all metadata types
-results = indexer.search_metadata(
-    query="Show me tables related to Slack data",
-    embedding_provider=embedding_provider,
-    limit=5
-)
-
-# Search specific metadata type
-results = indexer.search_metadata(
-    query="Find tables containing Zendesk ticket data",
-    embedding_provider=embedding_provider,
-    metadata_type="tables",
-    limit=5
-)
-```
-
-## Development
-
-## Setting Up Development Environment
-
-1. **Clone the repository**:
+1. **Clone the Repository**:
    ```bash
    git clone https://github.com/your-username/omen-vectorstore.git
    cd omen-vectorstore
    ```
 
-2. **Install development dependencies**:
+2. **Set Up Qdrant**:
    ```bash
-   pip3 install -e ".[dev]"
+   # Create data directory
+   mkdir -p qdrant_data
+   
+   # Start Qdrant
+   docker-compose up -d qdrant
+   
+   # Verify it's running
+   curl http://localhost:55000/dashboard
    ```
 
-3. **Set up pre-commit hooks** (optional but recommended):
+3. **Install Dependencies**:
    ```bash
-   pre-commit install
+   # Install all required packages
+   pip3 install -r requirements.txt
    ```
 
-## Running Tests
+4. **Configure Environment**:
+   ```bash
+   # Copy template
+   cp .env.template .env
+   
+   # Edit .env with your credentials
+   # Required:
+   KEBOOLA_TOKEN=your-keboola-storage-api-token
+   KEBOOLA_API_URL=https://connection.keboola.com
+   OPENAI_API_KEY=your-openai-api-key
+   ```
 
-The project uses pytest for testing. To run tests:
+5. **Extract and Index Metadata**:
+   ```bash
+   # Extract and index in one step
+   python3 -m app.main extract --and-index
+   ```
+
+6. **Run Your First Search**:
+   ```python
+   from app.vectorizer import OpenAIProvider
+   from app.indexer import QdrantIndexer
+   from app.config import Config
+
+   # Initialize components
+   config = Config.from_env()
+   embedding_provider = OpenAIProvider(
+       api_key=config.openai_api_key,
+       model="text-embedding-ada-002"
+   )
+   indexer = QdrantIndexer()
+
+   # Search for tables
+   results = indexer.search_metadata(
+       query="Find tables containing Zendesk ticket data",
+       embedding_provider=embedding_provider,
+       metadata_type="tables",
+       limit=5
+   )
+
+   # Print results
+   for result in results:
+       print(f"Score: {result['score']}")
+       print(f"Type: {result['metadata_type']}")
+       print(f"Metadata: {result['metadata']}")
+       print("---")
+   ```
+
+## Advanced Usage
+
+### Search Operations
+
+The system supports various types of searches:
+
+1. **General Metadata Search**:
+   ```python
+   results = indexer.search_metadata(
+       query="Show me tables related to Slack data",
+       embedding_provider=embedding_provider,
+       limit=5
+   )
+   ```
+
+2. **Type-Specific Search**:
+   ```python
+   # Search only tables
+   results = indexer.search_metadata(
+       query="Find tables with customer data",
+       embedding_provider=embedding_provider,
+       metadata_type="tables",
+       limit=5
+   )
+
+   # Search only transformations
+   results = indexer.search_metadata(
+       query="Find transformations that clean data",
+       embedding_provider=embedding_provider,
+       metadata_type="transformations",
+       limit=5
+   )
+   ```
+
+3. **Column Search**:
+   ```python
+   # Find similar columns across tables
+   results = indexer.find_similar_columns(
+       column_name="email",
+       table_id="in.c-main.customers",
+       embedding_provider=embedding_provider,
+       limit=5
+   )
+
+   # Find columns in a specific table
+   results = indexer.find_table_columns(
+       table_id="in.c-main.customers",
+       query="Find email columns",
+       embedding_provider=embedding_provider,
+       limit=5
+   )
+   ```
+
+4. **Transformation Search**:
+   ```python
+   # Find transformations related to a table
+   results = indexer.find_related_transformations(
+       table_id="in.c-main.customers",
+       embedding_provider=embedding_provider,
+       limit=5
+   )
+   ```
+
+### Understanding Search Results
+
+Search results include rich metadata based on the type:
+
+1. **Table Results**:
+   - Table name and ID
+   - Description and tags
+   - Column information
+   - Row counts and data sizes
+
+2. **Column Results**:
+   - Column name and type
+   - Description
+   - Statistics (min, max, avg for numeric; unique counts for all)
+   - Quality metrics (completeness, validity)
+   - Parent table information
+
+3. **Transformation Results**:
+   - Transformation name and type
+   - Description
+   - Code blocks and their operations
+   - Input/output dependencies
+   - Runtime information
+
+## Development
+
+### Running Tests
 
 ```bash
-# Run all tests
-pytest tests/
+# Install development dependencies
+pip3 install -r requirements-dev.txt
 
-# Run with coverage report
-pytest tests/ --cov=app --cov-report=term-missing
+# Run all tests
+python3 -m pytest tests/ -v
 
 # Run specific test file
-pytest tests/test_indexer.py
+python3 -m pytest tests/test_indexer.py -v
 
-# Run specific test
-pytest tests/test_indexer.py::test_ensure_collection_creates_new
+# Run with coverage
+python3 -m pytest tests/ --cov=app --cov-report=term-missing
 ```
 
-## Code Quality
-
-The project includes several code quality tools:
+### Code Quality
 
 ```bash
-# Format code with black
+# Format code
 black app/ tests/
 
 # Sort imports
 isort app/ tests/
 
-# Run type checking
+# Type checking
 mypy app/ tests/
 
-# Run linter
+# Linting
 flake8 app/ tests/
 ```
 
-## Continuous Integration
+## Troubleshooting
 
-The project uses GitHub Actions for CI/CD:
+Common issues and solutions:
 
-- Tests run automatically on all branches and pull requests
-- Coverage reports are uploaded to Codecov
-- Code quality checks are enforced
+1. **Qdrant Connection Issues**:
+   ```bash
+   # Check if Qdrant is running
+   docker ps | grep qdrant
+   
+   # Check logs
+   docker-compose logs qdrant
+   
+   # Restart Qdrant
+   docker-compose restart qdrant
+   ```
 
-The workflow includes:
-- Python 3.11 environment setup
-- Development dependencies installation
-- Qdrant service container for tests
-- Test execution with coverage reporting
-- Coverage upload to Codecov
+2. **Storage Space Issues**:
+   ```bash
+   # Clear Qdrant data and start fresh
+   docker-compose down -v
+   rm -rf qdrant_data/*
+   docker-compose up -d qdrant
+   ```
 
-## Project Structure
+3. **API Rate Limits**:
+   - For OpenAI: Reduce batch size in indexing operations
+   - For Keboola: Use incremental updates instead of full extracts
 
-```
-/omen-vectorstore
-├── README.md                # This file
-├── DEVELOPMENT_PLAN.md      # Development roadmap
-├── requirements.txt         # Production dependencies
-├── requirements-dev.txt     # Development dependencies
-├── setup.py                # Package installation
-├── docker-compose.yml      # Docker services configuration
-├── .env.template           # Environment variables template
-├── test_search.py         # Example search script
-├── /app
-│   ├── main.py             # CLI entry point
-│   ├── config.py           # Configuration management
-│   ├── keboola_client.py   # Keboola API integration
-│   ├── vectorizer.py       # Embedding providers
-│   └── indexer.py          # Qdrant integration
-└── /tests                  # Test files
-    ├── conftest.py         # Test fixtures and configuration
-    ├── test_indexer.py     # Indexer tests
-    ├── test_vectorizer.py  # Vectorizer tests
-    └── test_keboola_client.py  # Keboola client tests
-```
+## Contributing
 
-## References
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests and ensure they pass
+5. Submit a pull request
 
-- [Keboola SAPI Python Client](https://github.com/keboola/sapi-python-client)
-- [Keboola API Documentation](https://keboola.docs.apiary.io/#)
-- [Qdrant Documentation](https://qdrant.tech/documentation/)
-- [SentenceTransformers Documentation](https://www.sbert.net/)
+## License
 
-## Example Workflow
-
-Here's a complete example workflow:
-
-```bash
-# 1. Start Qdrant
-mkdir -p qdrant_data
-docker-compose up -d qdrant
-
-# 2. Extract and index metadata
-python3 -m app.main extract --and-index
-
-# 3. Run test searches
-python3 test_search.py
-
-# 4. When done, stop Qdrant
-docker-compose down
-```
-
-## Docker Compose Services
-
-### Qdrant Vector Database
-
-The `docker-compose.yml` includes Qdrant with optimized settings:
-
-- **Ports**:
-  - 55000: REST API (mapped from 6333)
-  - 55001: GRPC (mapped from 6334)
-  
-- **Optimizations**:
-  - WAL Capacity: 512MB
-  - Storage Size: 4GB
-  - Persistent storage in `./qdrant_data`
-  - Memory-mapped storage for better performance
-
-- **Data Persistence**:
-  - Uses a bind mount to `./qdrant_data`
-  - Data survives container restarts
-  - Use `docker-compose down && rm -rf qdrant_data/*` to clear data
-
-## Search Examples
-
-Here are some example search results:
-
-```
-Search Results for "Show me tables related to Slack data":
-=====================================================
-1. Type: table_details (Score: 0.606)
-   Name: tables-slack_ai_news_urls
-
-2. Type: tables (Score: 0.606)
-   Name: tables-slack_ai_news_urls
-
-3. Type: buckets (Score: 0.528)
-   Name: c-join-slack-zendesk-data
-
-Search Results for "Find tables containing Zendesk ticket data":
-=====================================================
-1. Type: tables (Score: 0.486)
-   Name: tickets_fields
-
-2. Type: tables (Score: 0.480)
-   Name: zendesk_data_comments
-
-3. Type: tables (Score: 0.472)
-   Name: tickets_fields_values
-```
+This project is licensed under the MIT License - see the LICENSE file for details.

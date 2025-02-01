@@ -46,6 +46,7 @@ class KeboolaClient:
             "table_hashes": {},
             "config_hashes": {},
             "config_row_hashes": {},
+            "column_hashes": {},
         }
         metadata = {
             "buckets": [],
@@ -53,6 +54,7 @@ class KeboolaClient:
             "table_details": {},
             "configurations": {},
             "config_rows": {},
+            "columns": {},
         }
 
         # Extract buckets and their metadata
@@ -75,12 +77,16 @@ class KeboolaClient:
                 metadata["table_details"].update(
                     previous_metadata["table_details"].get(bucket_id, {})
                 )
+                if bucket_id in previous_metadata.get("columns", {}):
+                    metadata["columns"][bucket_id] = previous_metadata["columns"][bucket_id]
                 continue
 
             metadata["buckets"].append(bucket)
 
             # Extract tables for this bucket
             metadata["tables"][bucket_id] = []
+            metadata["columns"][bucket_id] = {}
+            
             for table in self.list_tables_paginated(bucket_id):
                 table_id = table.get("id", "unknown")
                 table_hash = self.state_manager.compute_hash(table)
@@ -98,14 +104,28 @@ class KeboolaClient:
                         metadata["table_details"][table_id] = previous_metadata[
                             "table_details"
                         ][table_id]
+                    if table_id in previous_metadata.get("columns", {}).get(bucket_id, {}):
+                        metadata["columns"][bucket_id][table_id] = previous_metadata["columns"][bucket_id][table_id]
                     continue
 
                 metadata["tables"][bucket_id].append(table)
 
-                # Get fresh table details
+                # Get fresh table details and process columns
                 details = self.get_table_details(table_id)
                 if details:
                     metadata["table_details"][table_id] = details
+                    # Extract and process columns
+                    if "columns" in details:
+                        metadata["columns"][bucket_id][table_id] = []
+                        for column in details["columns"]:
+                            column_id = f"{table_id}.{column.get('name', 'unknown')}"
+                            column_hash = self.state_manager.compute_hash(column)
+                            new_state["column_hashes"][column_id] = column_hash
+                            # Enrich column metadata with table context
+                            column["table_id"] = table_id
+                            column["bucket_id"] = bucket_id
+                            metadata["columns"][bucket_id][table_id].append(column)
+                            logging.debug(f"Processed column {column_id} for table {table_id}")
 
         # Extract configurations and their rows
         try:
@@ -285,40 +305,100 @@ class KeboolaClient:
     ) -> List[Dict]:
         """List configurations, optionally filtered by component."""
         try:
-            url = f"{self.url}/components"
-            if component_id:
-                url = f"{url}/{component_id}/configs"
-
-            response = self.session.get(url)
+            # Get all components using the correct endpoint
+            response = self.session.get(f"{self.url}/components")
             response.raise_for_status()
-            data = response.json()
+            components = response.json()
+            all_configs = []
 
-            # Handle both list and object responses
-            configs = data if isinstance(data, list) else data.get("components", [])
+            # For each component, get its configurations
+            for component in components:
+                component_id = component.get("id")
+                if not component_id:
+                    continue
 
-            # Add versions if requested
-            if include_versions:
-                for config in configs:
-                    component_id = config.get("id")  # For components list
-                    config_id = config.get("id")  # For configs list
+                try:
+                    # Get configurations for this component using the correct endpoint
+                    config_response = self.session.get(
+                        f"{self.url}/components/{component_id}/configs"
+                    )
+                    config_response.raise_for_status()
+                    configs = config_response.json()
+                    
+                    # Enrich each config with component info and versions if requested
+                    for config in configs:
+                        config["componentId"] = component_id
+                        config["component"] = component
+                        
+                        if include_versions:
+                            try:
+                                config_id = config.get("id")
+                                if config_id:
+                                    version_response = self.session.get(
+                                        f"{self.url}/components/{component_id}/configs/{config_id}/versions"
+                                    )
+                                    version_response.raise_for_status()
+                                    config["versions"] = version_response.json()
+                            except Exception as e:
+                                logging.warning(
+                                    f"Error fetching versions for config {config_id}: {e}"
+                                )
+                                config["versions"] = []
+                        
+                        # Get configuration rows if supported
+                        try:
+                            config_id = config.get("id")
+                            if config_id:
+                                rows_response = self.session.get(
+                                    f"{self.url}/components/{component_id}/configs/{config_id}/rows"
+                                )
+                                rows_response.raise_for_status()
+                                config["rows"] = rows_response.json()
+                        except Exception as e:
+                            logging.debug(
+                                f"Config {config_id} doesn't support rows: {e}"
+                            )
+                            config["rows"] = []
+                            
+                        all_configs.append(config)
+                        
+                except Exception as e:
+                    logging.error(
+                        f"Error fetching configurations for component {component_id}: {e}"
+                    )
 
-                    if not component_id or not config_id:
-                        continue
+            return all_configs
 
-                    try:
-                        versions_response = self.session.get(
-                            f"{self.url}/components/{component_id}/configs/{config_id}/versions"
-                        )
-                        versions_response.raise_for_status()
-                        config["versions"] = versions_response.json()
-                    except requests.exceptions.RequestException as e:
-                        logging.warning(
-                            f"Error fetching versions for config {config_id}: {e}"
-                        )
-                        config["versions"] = []
-
-            return configs
-
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             logging.error(f"Error listing configurations: {e}")
             raise
+
+    def get_transformation_details(self, transformation_id: str) -> dict:
+        """
+        Fetch detailed metadata for a specific transformation.
+        
+        Args:
+            transformation_id: The ID of the transformation to fetch.
+            
+        Returns:
+            dict: Detailed transformation metadata including code blocks, dependencies, etc.
+        """
+        response = self.client.transformations.get(transformation_id)
+        return response
+
+    def get_all_transformations(self) -> dict:
+        """
+        Fetch metadata for all transformations in the project.
+        
+        Returns:
+            dict: Dictionary mapping transformation IDs to their metadata.
+        """
+        transformations = {}
+        response = self.client.transformations.list()
+        
+        for transformation in response:
+            transformation_id = transformation["id"]
+            details = self.get_transformation_details(transformation_id)
+            transformations[transformation_id] = details
+        
+        return {"transformations": transformations}
