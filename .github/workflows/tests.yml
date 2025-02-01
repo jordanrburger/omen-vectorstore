@@ -46,10 +46,4 @@ jobs:
         KEBOOLA_TOKEN: dummy-token
         KEBOOLA_API_URL: https://dummy.keboola.com
       run: |
-        pytest tests/ --cov=app --cov-report=xml
-        
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        fail_ci_if_error: true
+        pytest tests/ --cov=app
