@@ -107,9 +107,9 @@ class TestColumnQuality(unittest.TestCase):
         # Setup mock embedding provider
         mock_embedding_provider = MagicMock()
         mock_embedding_provider.embed.return_value = [
-            [0.1, 0.2],  # email column
-            [0.3, 0.4],  # age column
-            [0.5, 0.6],  # phone column
+            [0.1] * 1536,  # email column
+            [0.2] * 1536,  # age column
+            [0.3] * 1536,  # phone column
         ]
 
         # Setup mock Qdrant client
@@ -120,14 +120,53 @@ class TestColumnQuality(unittest.TestCase):
         indexer = QdrantIndexer()
         metadata = {
             "table_details": {
-                "table1": self.mock_table_detail
+                "table1": {
+                    "columns": [
+                        {
+                            "name": "email",
+                            "type": "VARCHAR",
+                            "description": "Customer email address",
+                            "quality_metrics": {
+                                "completeness": 0.98,
+                                "validity": 0.95,
+                                "standardization": {"standard": "RFC 5322"},
+                                "common_issues": ["invalid_format", "missing_domain"]
+                            }
+                        },
+                        {
+                            "name": "age",
+                            "type": "INTEGER",
+                            "description": "Customer age",
+                            "quality_metrics": {
+                                "completeness": 0.85,
+                                "validity": 0.99,
+                                "range_check": {
+                                    "min_valid": 18,
+                                    "max_valid": 120
+                                },
+                                "common_issues": ["out_of_range", "missing_values"]
+                            }
+                        },
+                        {
+                            "name": "phone",
+                            "type": "VARCHAR",
+                            "description": "Customer phone number",
+                            "quality_metrics": {
+                                "completeness": 0.75,
+                                "validity": 0.80,
+                                "standardization": {"standard": "E.164"},
+                                "common_issues": ["invalid_format", "missing_country_code"]
+                            }
+                        }
+                    ]
+                }
             }
         }
         indexer.index_metadata(metadata, mock_embedding_provider)
 
         # Verify embeddings were created with quality metrics included
         expected_texts = [
-            "Name: email | Type: VARCHAR | Description: Customer email address | Quality: 98% complete, 95% valid, Issues: invalid_format, missing_domain",
+            "Name: email | Type: VARCHAR | Description: Customer email address | Quality: 98% complete, 95% valid, Standard: RFC 5322, Issues: invalid_format, missing_domain",
             "Name: age | Type: INTEGER | Description: Customer age | Quality: 85% complete, 99% valid, Valid range: 18-120, Issues: out_of_range, missing_values",
             "Name: phone | Type: VARCHAR | Description: Customer phone number | Quality: 75% complete, 80% valid, Standard: E.164, Issues: invalid_format, missing_country_code",
         ]

@@ -11,6 +11,7 @@ from app.vectorizer import (
     OpenAIProvider,
     SentenceTransformerProvider,
 )
+from app.batch_processor import BatchConfig
 
 
 def get_embedding_provider(config: Config) -> EmbeddingProvider:
@@ -75,11 +76,19 @@ def search_metadata(
     indexer: QdrantIndexer,
     embedding_provider: EmbeddingProvider,
     metadata_type: Optional[str] = None,
+    component_type: Optional[str] = None,
+    table_id: Optional[str] = None,
+    stage: Optional[str] = None,
     limit: int = 10,
 ) -> List[Dict]:
-    """Search metadata using semantic search."""
+    """Search metadata using semantic search with enhanced filtering."""
     logging.info(
-        f"Searching for '{query}' " f"(type: {metadata_type or 'all'}, limit: {limit})"
+        f"Searching for '{query}' "
+        f"(type: {metadata_type or 'all'}, "
+        f"component_type: {component_type or 'all'}, "
+        f"table_id: {table_id or 'all'}, "
+        f"stage: {stage or 'all'}, "
+        f"limit: {limit})"
     )
 
     try:
@@ -87,6 +96,9 @@ def search_metadata(
             query=query,
             embedding_provider=embedding_provider,
             metadata_type=metadata_type,
+            component_type=component_type,
+            table_id=table_id,
+            stage=stage,
             limit=limit,
         )
         logging.info(f"Found {len(results)} results")
@@ -97,7 +109,7 @@ def search_metadata(
         raise
 
 
-def index_command(config: Config):
+def index_command(config: Config, batch_config: BatchConfig):
     """Command to extract and index metadata."""
     # Initialize components
     state_manager = StateManager()
@@ -108,9 +120,8 @@ def index_command(config: Config):
     )
     embedding_provider = get_embedding_provider(config)
     indexer = QdrantIndexer(
-        host=config.qdrant_host,
-        port=config.qdrant_port,
         collection_name=config.qdrant_collection,
+        batch_config=batch_config
     )
 
     # Extract and index metadata
@@ -119,13 +130,19 @@ def index_command(config: Config):
     logging.info("Metadata extraction and indexing completed")
 
 
-def search_command(config: Config, query: str, metadata_type: Optional[str] = None, limit: int = 10):
-    """Command to search indexed metadata."""
+def search_command(
+    config: Config,
+    query: str,
+    metadata_type: Optional[str] = None,
+    component_type: Optional[str] = None,
+    table_id: Optional[str] = None,
+    stage: Optional[str] = None,
+    limit: int = 10
+):
+    """Command to search indexed metadata with enhanced filtering."""
     embedding_provider = get_embedding_provider(config)
     indexer = QdrantIndexer(
-        host=config.qdrant_host,
-        port=config.qdrant_port,
-        collection_name=config.qdrant_collection,
+        collection_name=config.qdrant_collection
     )
 
     results = search_metadata(
@@ -133,6 +150,9 @@ def search_command(config: Config, query: str, metadata_type: Optional[str] = No
         indexer=indexer,
         embedding_provider=embedding_provider,
         metadata_type=metadata_type,
+        component_type=component_type,
+        table_id=table_id,
+        stage=stage,
         limit=limit,
     )
 
@@ -174,11 +194,17 @@ def main():
 
     # Index command
     index_parser = subparsers.add_parser("index", help="Extract and index metadata")
+    index_parser.add_argument("--batch-size", type=int, default=10, help="Size of batches for processing")
+    index_parser.add_argument("--max-retries", type=int, default=3, help="Maximum number of retries for failed operations")
+    index_parser.add_argument("--retry-delay", type=float, default=1.0, help="Initial delay between retries in seconds")
 
     # Search command
     search_parser = subparsers.add_parser("search", help="Search indexed metadata")
     search_parser.add_argument("query", help="Search query")
     search_parser.add_argument("--type", help="Filter by metadata type (buckets, tables, configurations)")
+    search_parser.add_argument("--component-type", help="Filter by component type (e.g., extractor, writer, application)")
+    search_parser.add_argument("--table-id", help="Filter by specific table ID")
+    search_parser.add_argument("--stage", help="Filter by stage (in/out)")
     search_parser.add_argument("--limit", type=int, default=10, help="Maximum number of results")
 
     args = parser.parse_args()
@@ -188,9 +214,23 @@ def main():
     logging.info("Configuration loaded")
 
     if args.command == "index":
-        index_command(config)
+        # Create batch config from arguments
+        batch_config = BatchConfig(
+            batch_size=args.batch_size,
+            max_retries=args.max_retries,
+            initial_retry_delay=args.retry_delay
+        )
+        index_command(config, batch_config)
     elif args.command == "search":
-        search_command(config, args.query, args.type, args.limit)
+        search_command(
+            config,
+            args.query,
+            args.type,
+            args.component_type,
+            args.table_id,
+            args.stage,
+            args.limit
+        )
     else:
         parser.print_help()
 
