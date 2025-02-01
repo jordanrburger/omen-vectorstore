@@ -3,29 +3,27 @@ import uuid
 from typing import Dict, List, Optional, Callable, Any, Union
 from functools import partial
 import json
+import asyncio
 
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.http.models import PointStruct
 from tqdm import tqdm
 
-from app.vectorizer import EmbeddingProvider
+from app.vectorizer import EmbeddingProvider, MetadataVectorizer
 from app.batch_processor import BatchProcessor, BatchConfig
 
 
 class QdrantIndexer:
     """Indexes metadata into Qdrant with vector embeddings."""
 
-    def __init__(
-        self,
-        collection_name: str = "keboola_metadata",
-        batch_config: Optional[BatchConfig] = None,
-    ):
-        """Initialize QdrantIndexer with collection name and batch configuration."""
-        self.collection_name = collection_name
-        self.vector_size = 1536  # OpenAI ada-002 embedding size
-        self.client = QdrantClient("localhost", port=55000)
-        self.batch_processor = BatchProcessor(batch_config or BatchConfig())
+    def __init__(self, client: QdrantClient, vectorizer: MetadataVectorizer):
+        """Initialize QdrantIndexer with client and vectorizer."""
+        self.client = client
+        self.vectorizer = vectorizer
+        self.vector_size = 1536  # OpenAI embedding size
+        self.collection_name = "keboola_metadata"
+        self.batch_processor = BatchProcessor(BatchConfig())
         self.ensure_collection()
 
     def ensure_collection(self) -> None:
@@ -48,6 +46,105 @@ class QdrantIndexer:
                     distance=models.Distance.COSINE
                 )
             )
+
+    async def create_collection(self, collection_name: str) -> None:
+        """Create a new collection if it doesn't exist."""
+        try:
+            collection_info = self.client.get_collection(collection_name)
+            if collection_info is None:
+                self.client.create_collection(
+                    collection_name=collection_name,
+                    vectors_config=models.VectorParams(
+                        size=self.vector_size,
+                        distance=models.Distance.COSINE
+                    )
+                )
+        except UnexpectedResponse:
+            self.client.create_collection(
+                collection_name=collection_name,
+                vectors_config=models.VectorParams(
+                    size=self.vector_size,
+                    distance=models.Distance.COSINE
+                )
+            )
+
+    async def index_metadata(self, metadata: Union[List[Dict], Dict], collection_name: str) -> None:
+        """Index metadata into the specified collection."""
+        if not metadata:
+            return
+
+        # Convert single metadata dict to list
+        if isinstance(metadata, dict):
+            metadata = [metadata]
+
+        # Process metadata in batches
+        batch_size = 100
+        for i in range(0, len(metadata), batch_size):
+            batch = metadata[i:i + batch_size]
+            
+            # Vectorize batch
+            vectors = self.vectorizer.vectorize_batch(batch)
+            
+            # Prepare points for indexing
+            points = []
+            for item, vector in zip(batch, vectors):
+                point_id = str(uuid.uuid4())
+                points.append(
+                    models.PointStruct(
+                        id=point_id,
+                        vector=vector,
+                        payload={
+                            "metadata": item,
+                            "text": self.vectorizer._prepare_text(item)
+                        }
+                    )
+                )
+            
+            # Index batch
+            self.client.upsert(
+                collection_name=collection_name,
+                points=points,
+                wait=True
+            )
+
+    async def search(
+        self,
+        query: str,
+        collection_name: str,
+        limit: int = 10,
+        score_threshold: float = 0.7
+    ) -> List[Dict]:
+        """Search for metadata using semantic similarity."""
+        # Vectorize query
+        query_vector = self.vectorizer.vectorize({"description": query})
+        
+        # Search in Qdrant
+        search_result = self.client.search(
+            collection_name=collection_name,
+            query_vector=query_vector,
+            limit=limit,
+            score_threshold=score_threshold
+        )
+        
+        # Format results
+        results = []
+        for hit in search_result:
+            result = {
+                "score": hit.score,
+                "metadata": hit.payload["metadata"],
+                "text": hit.payload["text"]
+            }
+            results.append(result)
+        
+        return results
+
+    async def delete_collection(self, collection_name: str) -> None:
+        """Delete a collection."""
+        try:
+            self.client.delete_collection(collection_name)
+        except Exception as e:
+            logging.error(f"Error deleting collection {collection_name}: {e}")
+            raise
 
     def index_metadata(
         self,
