@@ -32,6 +32,24 @@ class StateManager:
         except Exception as e:
             logging.error(f"Error saving state to {self.state_file}: {e}")
 
+    def load_extraction_state(self) -> Dict:
+        """Load the extraction state."""
+        return self.state.get("extraction_state", {})
+
+    def save_extraction_state(self, state: Dict) -> None:
+        """Save the extraction state."""
+        self.state["extraction_state"] = state
+        self._save_state()
+
+    def load_metadata(self) -> Optional[Dict]:
+        """Load the previously extracted metadata."""
+        return self.state.get("metadata")
+
+    def save_metadata(self, metadata: Dict) -> None:
+        """Save the extracted metadata."""
+        self.state["metadata"] = metadata
+        self._save_state()
+
     def get_metadata_hash(
         self,
         metadata_type: str,
