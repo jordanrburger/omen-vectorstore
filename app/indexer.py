@@ -97,6 +97,9 @@ class QdrantIndexer:
                             batch_size,
                             {"table_id": table_id},
                         )
+            elif metadata_type == "transformations":
+                # Handle transformations separately
+                self._index_transformation_metadata(metadata, embedding_provider)
             elif isinstance(items, list):
                 logging.info(f"Found {len(items)} items of type {metadata_type}")
                 self._index_items(
@@ -353,6 +356,11 @@ class QdrantIndexer:
                     if "table_id" in hit.payload
                     else {}
                 ),
+                **(
+                    {"transformation_id": hit.payload["transformation_id"]}
+                    if "transformation_id" in hit.payload
+                    else {}
+                ),
             }
             for hit in results
         ]
@@ -445,3 +453,188 @@ class QdrantIndexer:
             ][:limit]
 
         return results
+
+    def _prepare_transformation_text(self, transformation: dict) -> str:
+        """
+        Prepare text representation of a transformation for embedding.
+        
+        Args:
+            transformation: Dictionary containing transformation metadata.
+            
+        Returns:
+            str: Text representation of the transformation.
+        """
+        parts = [
+            f"Name: {transformation['name']}",
+            f"Type: {transformation['type']}",
+        ]
+        
+        if "description" in transformation:
+            parts.append(f"Description: {transformation['description']}")
+            
+        if "dependencies" in transformation:
+            deps = transformation["dependencies"]
+            deps_parts = []
+            if "requires" in deps:
+                deps_parts.append(f"Requires {', '.join(deps['requires'])}")
+            if "produces" in deps:
+                deps_parts.append(f"Produces {', '.join(deps['produces'])}")
+            if deps_parts:
+                parts.append(f"Dependencies: {'; '.join(deps_parts)}")
+                
+        if "runtime" in transformation:
+            runtime = transformation["runtime"]
+            parts.append(f"Runtime: {runtime.get('backend', 'unknown')}, {runtime.get('memory', 'unknown')} memory")
+            
+        return " | ".join(parts)
+
+    def _prepare_block_text(self, block: dict, transformation_id: str) -> str:
+        """
+        Prepare text representation of a transformation block for embedding.
+        
+        Args:
+            block: Dictionary containing block metadata.
+            transformation_id: ID of the parent transformation.
+            
+        Returns:
+            str: Text representation of the block.
+        """
+        parts = [f"Block: {block['name']}"]
+        
+        if "inputs" in block:
+            inputs = [f"{i['destination']} from {i['source']}" for i in block["inputs"]]
+            parts.append(f"Inputs: {', '.join(inputs)}")
+            
+        if "outputs" in block:
+            outputs = [f"{o['source']} to {o['destination']}" for o in block["outputs"]]
+            parts.append(f"Outputs: {', '.join(outputs)}")
+            
+        if "code" in block:
+            # Extract key operations from code without including full code
+            code_summary = []
+            code = block["code"].lower()
+            
+            # Extract comments as they often describe the operation
+            comments = [line.strip("# ") for line in block["code"].split("\n") 
+                       if line.strip().startswith("#")]
+            if comments:
+                code_summary.extend(comments[:2])  # Include up to 2 comments
+                
+            # Look for common operations in the code
+            operations = [
+                ("read_csv", "read_csv"),
+                ("to_csv", "to_csv"),
+                ("merge", "merge"),
+                ("groupby", "groupby"),
+                ("join", "join"),
+                ("agg", "aggregate"),
+                ("fillna", "fill nulls"),
+                ("drop", "drop"),
+                ("rename", "rename"),
+                ("sort", "sort"),
+            ]
+            
+            for op, desc in operations:
+                if op in code:
+                    code_summary.append(desc)
+                    
+            if code_summary:
+                parts.append(f"Code: {', '.join(code_summary)}")
+        
+        return " | ".join(parts)
+
+    def _index_transformation_metadata(self, metadata: dict, embedding_provider: EmbeddingProvider) -> None:
+        """
+        Index transformation metadata into the vector store.
+        
+        Args:
+            metadata: Dictionary containing transformation metadata.
+            embedding_provider: Provider for generating embeddings.
+        """
+        if "transformations" not in metadata:
+            return
+            
+        for transformation_id, transformation in metadata["transformations"].items():
+            # Prepare texts for embedding
+            texts = [self._prepare_transformation_text(transformation)]
+            
+            # Add texts for each block
+            if "blocks" in transformation:
+                for block in transformation["blocks"]:
+                    texts.append(self._prepare_block_text(block, transformation_id))
+                    
+            # Get embeddings for all texts
+            embeddings = embedding_provider.embed(texts)
+            
+            # Create points for transformation and blocks
+            points = []
+            
+            # Add transformation point
+            points.append(
+                models.PointStruct(
+                    id=self._generate_point_id("transformations", {"id": transformation_id}),
+                    vector=embeddings[0],
+                    payload={
+                        "metadata_type": "transformations",
+                        "raw_metadata": transformation,
+                    }
+                )
+            )
+            
+            # Add points for each block
+            for i, block in enumerate(transformation.get("blocks", []), 1):
+                points.append(
+                    models.PointStruct(
+                        id=self._generate_point_id(
+                            "transformation_blocks",
+                            {"id": f"{transformation_id}_block_{i}"}
+                        ),
+                        vector=embeddings[i],
+                        payload={
+                            "metadata_type": "transformation_blocks",
+                            "transformation_id": transformation_id,
+                            "raw_metadata": block,
+                        }
+                    )
+                )
+                
+            # Upsert all points
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=points,
+            )
+
+    def find_related_transformations(self, table_id: str, embedding_provider: EmbeddingProvider, limit: int = 5) -> List[dict]:
+        """
+        Find transformations that are related to a specific table.
+        
+        Args:
+            table_id: The ID of the table to find related transformations for.
+            embedding_provider: Provider for generating embeddings.
+            limit: Maximum number of results to return.
+            
+        Returns:
+            List[dict]: List of related transformations.
+        """
+        # Search for transformations that use this table
+        results = self.client.search(
+            collection_name=self.collection_name,
+            query_vector=embedding_provider.embed([f"table {table_id}"])[0],
+            query_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="metadata_type",
+                        match=models.MatchValue(value="transformations")
+                    )
+                ]
+            ),
+            limit=limit
+        )
+        
+        return [
+            {
+                "score": hit.score,
+                "metadata": hit.payload["raw_metadata"],
+            }
+            for hit in results
+        ]
