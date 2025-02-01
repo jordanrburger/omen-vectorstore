@@ -129,7 +129,7 @@ Search results include:
 
 ### Search Operations
 
-The system supports various types of semantic searches:
+The system supports various types of semantic searches with advanced filtering capabilities:
 
 1. **General Metadata Search**:
    ```bash
@@ -144,12 +144,69 @@ The system supports various types of semantic searches:
 
    # Search only configurations
    python3 -m app.main search "Find transformations that process Zendesk data" --type configurations
+
+   # Search only buckets
+   python3 -m app.main search "Find staging buckets" --type buckets
    ```
 
-3. **Limiting Results**:
+3. **Component Type Filtering**:
    ```bash
-   # Get top 5 most relevant results
-   python3 -m app.main search "Find OAuth authentication configurations" --limit 5
+   # Search for extractor configurations
+   python3 -m app.main search "Find Google Analytics data" \
+     --type configurations \
+     --component-type extractor
+
+   # Search for writer configurations
+   python3 -m app.main search "Find Snowflake writers" \
+     --type configurations \
+     --component-type writer
+
+   # Search for transformations
+   python3 -m app.main search "Find data cleaning processes" \
+     --type configurations \
+     --component-type transformation
+   ```
+
+4. **Table-Specific Search**:
+   ```bash
+   # Search for columns in a specific table
+   python3 -m app.main search "Find email columns" \
+     --table-id in.c-main.customers
+
+   # Search for transformations using a specific table
+   python3 -m app.main search "Find transformations" \
+     --type configurations \
+     --table-id in.c-main.customers
+   ```
+
+5. **Stage Filtering**:
+   ```bash
+   # Search input stage tables
+   python3 -m app.main search "Find raw data tables" \
+     --type tables \
+     --stage in
+
+   # Search output stage tables
+   python3 -m app.main search "Find processed data" \
+     --type tables \
+     --stage out
+   ```
+
+6. **Combined Filtering**:
+   ```bash
+   # Complex search with multiple filters
+   python3 -m app.main search "Find email validation" \
+     --type configurations \
+     --component-type processor \
+     --table-id in.c-main.customers \
+     --limit 5
+
+   # Search for extractors with specific data
+   python3 -m app.main search "Find Salesforce data" \
+     --type configurations \
+     --component-type extractor \
+     --stage in \
+     --limit 3
    ```
 
 ### Understanding Search Results
@@ -157,47 +214,99 @@ The system supports various types of semantic searches:
 Search results include rich metadata based on the type:
 
 1. **Table Results**:
-   - Table ID and name
-   - Description (if available)
-   - Bucket information
-   - Stage (in/out)
+   ```json
+   {
+     "type": "tables",
+     "score": 0.875,
+     "id": "in.c-main.customers",
+     "name": "customers",
+     "description": "Main customer table",
+     "stage": "in",
+     "bucket": {
+       "id": "in.c-main",
+       "name": "c-main"
+     }
+   }
+   ```
 
 2. **Configuration Results**:
-   - Configuration ID and name
-   - Component details
-   - Description
-   - Version information
-   - Creation and modification timestamps
-
-3. **Bucket Results**:
-   - Bucket ID and name
-   - Stage information
-   - Description (if available)
-
-### Batch Processing
-
-The system supports optimized batch processing with configurable parameters:
-
-1. **Batch Size**:
-   - Controls the number of items processed in each batch
-   - Default: 10 items
-   - Adjust based on available memory and API rate limits
-   ```bash
-   python3 -m app.main index --batch-size 20
+   ```json
+   {
+     "type": "configurations",
+     "score": 0.923,
+     "id": "keboola.ex-salesforce-v2",
+     "name": "Salesforce Extractor",
+     "component": {
+       "type": "extractor",
+       "name": "Salesforce V2"
+     },
+     "description": "Extracts data from Salesforce",
+     "created": "2024-01-01T12:00:00Z",
+     "version": "1.2.3"
+   }
    ```
 
-2. **Retry Mechanism**:
-   - Automatic retries for failed operations
-   - Exponential backoff strategy
-   - Configurable maximum retries and initial delay
-   ```bash
-   python3 -m app.main index --max-retries 5 --retry-delay 2.0
+3. **Column Results**:
+   ```json
+   {
+     "type": "columns",
+     "score": 0.891,
+     "name": "email",
+     "table_id": "in.c-main.customers",
+     "description": "Customer email address",
+     "data_type": "VARCHAR",
+     "statistics": {
+       "unique_count": 15234,
+       "null_count": 123
+     }
+   }
    ```
 
-3. **State Management**:
-   - Tracks processed items
-   - Supports incremental updates
-   - Maintains processing state across runs
+4. **Bucket Results**:
+   ```json
+   {
+     "type": "buckets",
+     "score": 0.845,
+     "id": "in.c-salesforce",
+     "name": "c-salesforce",
+     "stage": "in",
+     "description": "Raw Salesforce data"
+   }
+   ```
+
+### Search Best Practices
+
+1. **Query Formulation**:
+   - Be specific in your queries (e.g., "Find tables with customer email data" vs "Find data")
+   - Include relevant technical terms (e.g., "Snowflake", "PostgreSQL", "OAuth")
+   - Use natural language - the semantic search understands context
+
+2. **Filter Usage**:
+   - Use `--type` to narrow down results to specific metadata types
+   - Combine filters for more precise results
+   - Use `--limit` to control result set size
+
+3. **Performance Tips**:
+   - Start with broad searches, then refine with filters
+   - Use stage filtering (`--stage`) for large projects
+   - Combine component type and table filters for transformation searches
+
+4. **Common Search Patterns**:
+   ```bash
+   # Find data sources
+   python3 -m app.main search "Find source tables" --type tables --stage in
+
+   # Find data transformations
+   python3 -m app.main search "Find data cleaning" --type configurations --component-type transformation
+
+   # Find specific columns
+   python3 -m app.main search "Find email columns" --type columns
+
+   # Find related configurations
+   python3 -m app.main search "Find configurations using customer data" \
+     --type configurations \
+     --table-id in.c-main.customers
+   ```
 
 ## Development
 
