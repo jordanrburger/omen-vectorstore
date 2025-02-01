@@ -1,81 +1,63 @@
-# Omen Vectorstore - Development Plan
+# Development Plan
 
-This document tracks the development progress of the Omen Vectorstore project.
+## Completed Tasks
 
-## Implementation Status
+### Infrastructure Setup
+- [x] Basic project structure
+- [x] Docker Compose for Qdrant
+- [x] Environment configuration
+- [x] Development dependencies setup
+- [x] Setup.py for package installation
+- [x] GitHub Actions CI/CD workflow
 
-### Completed Features ✅
+### Core Features
+- [x] Keboola Storage API integration
+- [x] Metadata extraction
+- [x] Vector embedding with SentenceTransformer
+- [x] Vector embedding with OpenAI
+- [x] Qdrant integration for vector storage
+- [x] Batch processing with retries
+- [x] Search functionality
 
-1. **Project Setup**
-   - Basic project structure
-   - Environment configuration
-   - Dependency management with pip3
-   - Docker Compose configuration for Qdrant
+### Testing
+- [x] Test infrastructure setup
+- [x] Unit tests for Keboola client
+- [x] Unit tests for vectorizer providers
+- [x] Unit tests for indexer operations
+- [x] Mocking for external dependencies
+- [x] CI/CD integration with test coverage
 
-2. **Keboola Metadata Extraction**
-   - Comprehensive metadata extraction including:
-     - Buckets and tables
-     - Table details
-     - Components and configurations
-     - Configuration rows
-   - Efficient storage using MessagePack and zlib compression
-   - Sharded storage for large datasets
-   - Incremental updates with state tracking
-   - Pagination for large result sets
+## Upcoming Tasks
 
-3. **Metadata Processing and Vectorization** ✅
-   - Implemented embedding provider abstraction
-   - Support for SentenceTransformer and OpenAI providers
-   - Efficient text preparation for embedding
-   - Batch processing with configurable sizes
+### Features
+- [ ] Add support for more metadata types
+- [ ] Implement advanced search filters
+- [ ] Add support for bulk operations
+- [ ] Implement caching layer
 
-4. **Qdrant Integration** ✅
-   - Collection setup and management
-   - Efficient indexing with batch processing
-   - Automatic retries and storage management
-   - Optimized storage settings
-   - Persistent data storage
+### Testing
+- [ ] Add integration tests
+- [ ] Add performance tests
+- [ ] Improve test coverage
+- [ ] Add stress tests for batch operations
 
-5. **Search Functionality** ✅
-   - Semantic search across all metadata
-   - Type-specific filtering
-   - Relevance scoring
-   - Example search script
+### Documentation
+- [ ] Add API documentation
+- [ ] Add architecture diagrams
+- [ ] Add performance benchmarks
+- [ ] Add contribution guidelines
 
-### Planned Features 📋
+### Optimization
+- [ ] Optimize batch size handling
+- [ ] Implement connection pooling
+- [ ] Add query result caching
+- [ ] Optimize memory usage
 
-1. **Performance Optimizations**
-   - Parallel metadata fetching
-   - Advanced caching mechanisms
-   - Memory usage optimizations
-   - Query optimization
-
-2. **Enhanced Metadata Management**
-   - Metadata validation and schema enforcement
-   - Data integrity checks
-   - Cleanup of old/unused metadata
-
-3. **API Development**
-   - FastAPI-based REST API
-   - GraphQL support
-   - Bulk operations
-   - Streaming responses
-
-4. **Monitoring and Observability**
-   - Metrics collection
-   - Health checks
-   - Performance monitoring
-   - Error tracking
-
-## Next Steps
-
-1. Implement FastAPI-based REST API
-2. Add schema validation and enforcement
-3. Implement parallel metadata fetching
-4. Add monitoring and metrics collection
-5. Enhance search capabilities with more filters and options
-6. Add bulk operations support
-7. Implement advanced caching
+## Technical Debt
+- [ ] Refactor error handling
+- [ ] Improve logging
+- [ ] Add type hints coverage
+- [ ] Optimize imports
 
 ## References
 

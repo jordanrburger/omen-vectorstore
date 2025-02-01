@@ -3,3 +3,4 @@ qdrant-client>=1.7.0
 sentence-transformers>=2.2.2
 python-dotenv>=1.0.0
 msgpack>=1.0.5
+openai>=1.0.0

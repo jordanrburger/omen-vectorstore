@@ -1,0 +1,49 @@
+name: Tests
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+    branches: [ '**' ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.11]
+
+    services:
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+          - 6334:6334
+        volumes:
+          - /tmp/qdrant_data:/qdrant/storage
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+        
+    - name: Wait for Qdrant to fully initialize
+      run: sleep 10
+
+    - name: Run tests with coverage
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+        QDRANT_HOST: localhost
+        QDRANT_PORT: 6333
+        KEBOOLA_TOKEN: dummy-token
+        KEBOOLA_API_URL: https://dummy.keboola.com
+      run: |
+        pytest tests/ --cov=app

@@ -53,8 +53,11 @@ The system performs the following steps:
 
 2. **Install Dependencies**:
    ```bash
-   # Install packages using pip3
+   # For production
    pip3 install -r requirements.txt
+
+   # For development (includes testing tools)
+   pip3 install -r requirements-dev.txt
    ```
 
 ### Configuration
@@ -119,6 +122,109 @@ results = indexer.search_metadata(
     limit=5
 )
 ```
+
+## Development
+
+## Setting Up Development Environment
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/your-username/omen-vectorstore.git
+   cd omen-vectorstore
+   ```
+
+2. **Install development dependencies**:
+   ```bash
+   pip3 install -e ".[dev]"
+   ```
+
+3. **Set up pre-commit hooks** (optional but recommended):
+   ```bash
+   pre-commit install
+   ```
+
+## Running Tests
+
+The project uses pytest for testing. To run tests:
+
+```bash
+# Run all tests
+pytest tests/
+
+# Run with coverage report
+pytest tests/ --cov=app --cov-report=term-missing
+
+# Run specific test file
+pytest tests/test_indexer.py
+
+# Run specific test
+pytest tests/test_indexer.py::test_ensure_collection_creates_new
+```
+
+## Code Quality
+
+The project includes several code quality tools:
+
+```bash
+# Format code with black
+black app/ tests/
+
+# Sort imports
+isort app/ tests/
+
+# Run type checking
+mypy app/ tests/
+
+# Run linter
+flake8 app/ tests/
+```
+
+## Continuous Integration
+
+The project uses GitHub Actions for CI/CD:
+
+- Tests run automatically on all branches and pull requests
+- Coverage reports are uploaded to Codecov
+- Code quality checks are enforced
+
+The workflow includes:
+- Python 3.11 environment setup
+- Development dependencies installation
+- Qdrant service container for tests
+- Test execution with coverage reporting
+- Coverage upload to Codecov
+
+## Project Structure
+
+```
+/omen-vectorstore
+├── README.md                # This file
+├── DEVELOPMENT_PLAN.md      # Development roadmap
+├── requirements.txt         # Production dependencies
+├── requirements-dev.txt     # Development dependencies
+├── setup.py                # Package installation
+├── docker-compose.yml      # Docker services configuration
+├── .env.template           # Environment variables template
+├── test_search.py         # Example search script
+├── /app
+│   ├── main.py             # CLI entry point
+│   ├── config.py           # Configuration management
+│   ├── keboola_client.py   # Keboola API integration
+│   ├── vectorizer.py       # Embedding providers
+│   └── indexer.py          # Qdrant integration
+└── /tests                  # Test files
+    ├── conftest.py         # Test fixtures and configuration
+    ├── test_indexer.py     # Indexer tests
+    ├── test_vectorizer.py  # Vectorizer tests
+    └── test_keboola_client.py  # Keboola client tests
+```
+
+## References
+
+- [Keboola SAPI Python Client](https://github.com/keboola/sapi-python-client)
+- [Keboola API Documentation](https://keboola.docs.apiary.io/#)
+- [Qdrant Documentation](https://qdrant.tech/documentation/)
+- [SentenceTransformers Documentation](https://www.sbert.net/)
 
 ## Example Workflow
 
@@ -187,28 +293,3 @@ Search Results for "Find tables containing Zendesk ticket data":
 3. Type: tables (Score: 0.472)
    Name: tickets_fields_values
 ```
-
-## Project Structure
-
-```
-/omen-vectorstore
-├── README.md                # This file
-├── requirements.txt         # Dependencies list
-├── docker-compose.yml      # Docker services configuration
-├── .env.template           # Environment variables template
-├── test_search.py         # Example search script
-├── /app
-│   ├── main.py             # CLI entry point
-│   ├── config.py           # Configuration management
-│   ├── keboola_client.py   # Keboola API integration
-│   ├── vectorizer.py       # Embedding providers
-│   └── indexer.py          # Qdrant integration
-└── /tests                  # Test files
-```
-
-## References
-
-- [Keboola SAPI Python Client](https://github.com/keboola/sapi-python-client)
-- [Keboola API Documentation](https://keboola.docs.apiary.io/#)
-- [Qdrant Documentation](https://qdrant.tech/documentation/)
-- [SentenceTransformers Documentation](https://www.sbert.net/)

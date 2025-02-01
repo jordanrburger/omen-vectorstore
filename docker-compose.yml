@@ -12,10 +12,11 @@ services:
       - QDRANT__STORAGE__WAL_CAPACITY_MB=512
       - QDRANT__STORAGE__STORAGE_SIZE_MB=4096  # Allocate 4GB for storage
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:6333/healthz", "||", "exit", "1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
 volumes:
