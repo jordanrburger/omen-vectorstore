@@ -134,7 +134,7 @@ class TestQdrantIndexer(unittest.TestCase):
 
     def test_generate_point_id(self):
         mock_qdrant_client = MagicMock()
-
+    
         with patch(
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
@@ -142,9 +142,10 @@ class TestQdrantIndexer(unittest.TestCase):
             indexer = QdrantIndexer()
             item = {"id": "test_id"}
             point_id = indexer._generate_point_id("test_type", item)
-
-            assert isinstance(point_id, int)
-            assert point_id > 0
+    
+            # Verify the point ID is a string and follows the expected format
+            assert isinstance(point_id, str)
+            assert point_id == "test_type_test_id"
 
     def test_search_metadata(self):
         mock_qdrant_client = MagicMock()

@@ -4,4 +4,82 @@
 # 2. Always check previous communication for repeated details before asking for new instructions.
 # 3. Automatically incorporate repeated points into the project documentation to be consistent and efficient.
 
-# These rules help ensure that the development process is as efficient and clear as possible. 
+# These rules help ensure that the development process is as efficient and clear as possible.
+
+# Project Architecture Rules (from README.md)
+1. Follow the four-step architecture:
+   - Metadata Extraction (using Keboola SAPI)
+   - Metadata Processing and Vectorization
+   - Indexing into Qdrant
+   - Search and Recommendation API
+2. Support incremental updates and state management
+3. Maintain optimized batch processing with retries
+4. Ensure proper vector dimensions (1536 for OpenAI embeddings)
+
+# Metadata Handling Rules
+1. Extract comprehensive metadata including:
+   - Bucket information
+   - Table details and column statistics
+   - Quality metrics
+   - Transformation code blocks and dependencies
+2. Process metadata into normalized documents before vectorization
+3. Maintain rich context in search results
+4. Support filtering by metadata type
+
+# Vector Search Implementation Rules
+1. Support multiple embedding providers (OpenAI, SentenceTransformer)
+2. Implement semantic search with proper relevance scoring
+3. Enable finding related items (tables, transformations, columns)
+4. Support batch operations for efficiency
+
+# API Integration Rules
+1. ALWAYS follow the official Keboola SAPI Python client documentation at https://github.com/keboola/sapi-python-client
+2. Use the client.tables.detail() method for table details instead of custom REST calls
+3. Avoid creating custom REST endpoints when equivalent SAPI client methods exist
+4. Properly handle pagination using the client's built-in methods
+
+# Code Organization Rules
+1. Keep core functionality within existing structure (app/*)
+2. Don't create new files/directories unless absolutely necessary
+3. Reuse existing client methods before implementing custom solutions
+4. Follow the pattern of other files in the project for consistency
+
+# Error Handling Rules
+1. Use the client's built-in error handling where possible
+2. Log errors consistently at appropriate levels
+3. Propagate errors appropriately rather than swallowing them
+4. Include context in error messages to aid debugging
+
+# Testing Rules
+1. Test with the actual SAPI client methods
+2. Verify API responses match expected schemas
+3. Handle edge cases (missing data, permissions, etc.)
+4. Use proper test fixtures and mocks
+
+# Documentation Rules
+1. Keep documentation in sync with code changes
+2. Document any deviations from SAPI client usage
+3. Include examples for non-obvious functionality
+4. Reference official SAPI docs where relevant
+
+# State Management Rules
+1. Use consistent state management patterns
+2. Don't reinvent caching mechanisms
+3. Respect existing state management in the codebase
+4. Document state dependencies
+
+# Performance and Optimization Rules
+1. Use batch processing for embeddings and indexing
+2. Implement proper retry mechanisms with backoff
+3. Optimize memory usage for large metadata sets
+4. Cache results where appropriate
+5. Use incremental updates to minimize API calls
+
+# Specific Corrections Needed
+1. Revert custom REST implementation in get_table_details()
+2. Use client.tables.detail() instead
+3. Remove unnecessary list_tables.py script
+4. Consolidate table listing functionality into existing methods
+5. Ensure vector dimensions match embedding model (1536 for OpenAI)
+6. Implement proper batch processing with retries
+7. Add comprehensive metadata extraction for all types 

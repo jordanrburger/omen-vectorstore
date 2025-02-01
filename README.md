@@ -8,10 +8,13 @@ The system performs the following steps:
 
 1. **Metadata Extraction**
    - Fetch buckets, tables, and table details from Keboola using the [Keboola SAPI Python Client](https://github.com/keboola/sapi-python-client) or directly with the API.
+   - Extract column metadata including statistics and quality metrics.
+   - Extract transformation metadata including code blocks and dependencies.
 
 2. **Metadata Processing and Vectorization**
    - Normalize and combine metadata fields (e.g., title, description, tags) into documents.
    - Convert documents into embeddings using an embedding abstraction that supports multiple providers (e.g., SentenceTransformer and OpenAI).
+   - Process transformation code blocks to extract key operations and dependencies.
 
 3. **Indexing into Qdrant**
    - Connect to a locally running Qdrant instance (dashboard: [http://localhost:55000/dashboard](http://localhost:55000/dashboard)).
@@ -100,11 +103,16 @@ python3 -m app.main index    # Index only
 You can search metadata in several ways:
 
 ```python
-from app.vectorizer import SentenceTransformerProvider
+from app.vectorizer import OpenAIProvider
 from app.indexer import QdrantIndexer
+from app.config import Config
 
 # Initialize components
-embedding_provider = SentenceTransformerProvider()
+config = Config.from_env()
+embedding_provider = OpenAIProvider(
+    api_key=config.openai_api_key,
+    model=config.embedding_model
+)
 indexer = QdrantIndexer()
 
 # Search all metadata types
@@ -121,7 +129,53 @@ results = indexer.search_metadata(
     metadata_type="tables",
     limit=5
 )
+
+# Search for transformations
+results = indexer.search_metadata(
+    query="Find transformations that process customer data",
+    embedding_provider=embedding_provider,
+    metadata_type="transformations",
+    limit=5
+)
+
+# Find transformations related to a specific table
+results = indexer.find_related_transformations(
+    table_id="in.c-main.customers",
+    embedding_provider=embedding_provider,
+    limit=5
+)
+
+# Find similar columns across tables
+results = indexer.find_similar_columns(
+    column_name="customer_id",
+    table_id="in.c-main.customers",
+    embedding_provider=embedding_provider,
+    limit=5
+)
 ```
+
+The search results include rich metadata about the matched items:
+
+- For tables: name, description, column information, and statistics
+- For columns: name, type, description, statistics, and quality metrics
+- For transformations: name, type, description, code blocks, and dependencies
+
+### Running Search Tests
+
+The project includes a comprehensive test script that demonstrates various search capabilities:
+
+```bash
+# Run the search tests
+python3 test_search.py
+```
+
+This will run several test scenarios:
+1. Search for transformations by functionality
+2. Search for specific code operations (e.g., data merging)
+3. Find transformations related to specific data sources
+4. Search for specific transformation blocks
+5. Find transformations related to specific tables
+6. Find similar columns across tables
 
 ## Development
 

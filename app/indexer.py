@@ -1,4 +1,5 @@
 import logging
+import uuid
 from typing import Dict, List, Optional
 
 from qdrant_client import QdrantClient, models
@@ -13,12 +14,13 @@ class QdrantIndexer:
     def __init__(
         self,
         host: str = "localhost",
-        port: int = 6333,
+        port: int = 55000,
         collection_name: str = "keboola_metadata",
     ):
         """Initialize the indexer with Qdrant connection details."""
         self.client = QdrantClient(host=host, port=port)
         self.collection_name = collection_name
+        self.vector_size = 1536  # OpenAI ada-002 embedding size
 
         # Ensure collection exists
         self._ensure_collection()
@@ -32,7 +34,7 @@ class QdrantIndexer:
                     self.client.create_collection(
                         collection_name=self.collection_name,
                         vectors_config=models.VectorParams(
-                            size=384,  # Default size for all-MiniLM-L6-v2
+                            size=self.vector_size,  # Using OpenAI ada-002 embedding size
                             distance=models.Distance.COSINE,
                         ),
                     )
@@ -60,10 +62,17 @@ class QdrantIndexer:
         batch_size: int = 10,
     ) -> None:
         """Index metadata into Qdrant with embeddings."""
-        total_items = sum(
-            len(items) if isinstance(items, list) else len(items.values())
-            for items in metadata.values()
+        total_items = (
+            len(metadata.get("buckets", []))
+            + sum(len(tables) for tables in metadata.get("tables", {}).values())
+            + sum(
+                len(columns)
+                for bucket_columns in metadata.get("columns", {}).values()
+                for columns in bucket_columns.values()
+            )
+            + len(metadata.get("configurations", []))
         )
+        
         logging.info(
             f"Starting indexing of {total_items} total items "
             f"with batch size {batch_size}"
@@ -73,33 +82,58 @@ class QdrantIndexer:
         for metadata_type, items in metadata.items():
             logging.info(f"Processing metadata type: {metadata_type}")
             
-            if metadata_type == "table_details":
-                # Handle table details and their columns
-                for table_id, table_details in items.items():
-                    # Index the table details
+            if metadata_type == "buckets":
+                # Handle buckets (list)
+                logging.info(f"Found {len(items)} items of type {metadata_type}")
+                self._index_items(
+                    items,
+                    metadata_type,
+                    embedding_provider,
+                    batch_size,
+                )
+            
+            elif metadata_type == "tables":
+                # Handle tables dictionary (bucket_id -> list of tables)
+                for bucket_id, tables in items.items():
+                    logging.info(
+                        f"Processing {len(tables)} tables for bucket {bucket_id}"
+                    )
                     self._index_items(
-                        [table_details],
-                        "table_details",
+                        tables,
+                        metadata_type,
                         embedding_provider,
                         batch_size,
+                        {"bucket_id": bucket_id},
                     )
-                    
-                    # Extract and index columns if present
-                    if "columns" in table_details:
-                        columns = table_details["columns"]
+            
+            elif metadata_type == "columns":
+                # Handle columns dictionary (bucket_id -> table_id -> list of columns)
+                for bucket_id, bucket_columns in items.items():
+                    for table_id, columns in bucket_columns.items():
                         logging.info(
                             f"Processing {len(columns)} columns for table {table_id}"
                         )
                         self._index_items(
                             columns,
-                            "columns",
+                            metadata_type,
                             embedding_provider,
                             batch_size,
-                            {"table_id": table_id},
+                            {
+                                "bucket_id": bucket_id,
+                                "table_id": table_id,
+                            },
                         )
-            elif metadata_type == "transformations":
-                # Handle transformations separately
-                self._index_transformation_metadata(metadata, embedding_provider)
+            
+            elif metadata_type == "configurations":
+                # Handle configurations as a list
+                logging.info(f"Found {len(items)} configurations")
+                self._index_items(
+                    items,
+                    metadata_type,
+                    embedding_provider,
+                    batch_size,
+                )
+            
             elif isinstance(items, list):
                 logging.info(f"Found {len(items)} items of type {metadata_type}")
                 self._index_items(
@@ -108,32 +142,6 @@ class QdrantIndexer:
                     embedding_provider,
                     batch_size,
                 )
-            elif isinstance(items, dict):
-                if metadata_type == "tables":
-                    # Handle tables dictionary (bucket_id -> list of tables)
-                    for bucket_id, tables in items.items():
-                        logging.info(
-                            f"Processing {len(tables)} tables for bucket {bucket_id}"
-                        )
-                        self._index_items(
-                            tables,
-                            metadata_type,
-                            embedding_provider,
-                            batch_size,
-                            {"bucket_id": bucket_id},
-                        )
-                else:
-                    # Handle other dictionary metadata
-                    item_list = list(items.values())
-                    logging.info(
-                        f"Found {len(item_list)} items of type {metadata_type}"
-                    )
-                    self._index_items(
-                        item_list,
-                        metadata_type,
-                        embedding_provider,
-                        batch_size,
-                    )
 
     def _index_items(
         self,
@@ -291,20 +299,18 @@ class QdrantIndexer:
                 fields.append(f"Tags: {', '.join(item['tags'])}")
             return " | ".join(fields) or str(item)
 
-    def _generate_point_id(self, metadata_type: str, item: Dict) -> int:
-        """Generate a unique ID for a metadata item."""
-        # Handle both dictionary and list items
-        if isinstance(item, dict):
-            if metadata_type == "columns":
-                # For columns, include table_id in the hash to ensure uniqueness
-                table_id = item.get("table_id", "unknown")
-                item_id = f"{table_id}_{item.get('name', str(item))}"
-            else:
-                item_id = item.get("id", str(sorted(item.items())))
+    def _generate_point_id(self, metadata_type: str, item: Dict) -> str:
+        """Generate a unique ID for a point based on its type and content."""
+        # Create a deterministic UUID based on metadata type and item ID/name
+        namespace_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, 'keboola.metadata')
+        
+        if "id" in item:
+            return str(uuid.uuid5(namespace_uuid, f"{metadata_type}_{item['id']}"))
+        elif "name" in item:
+            return str(uuid.uuid5(namespace_uuid, f"{metadata_type}_{item['name']}"))
         else:
-            item_id = str(item)
-        # Generate a positive integer hash
-        return abs(hash(f"{metadata_type}_{item_id}"))
+            # Fallback to a random UUID if no id or name is available
+            return str(uuid.uuid4())
 
     def search_metadata(
         self,
@@ -418,40 +424,65 @@ class QdrantIndexer:
         table_id: str,
         embedding_provider: EmbeddingProvider,
         limit: int = 10,
-        exclude_same_table: bool = True,
     ) -> List[Dict]:
         """Find columns similar to the specified column across all tables."""
-        # Get the source column's metadata
-        source_columns = self.find_table_columns(table_id=table_id)
-        source_column = next(
-            (col for col in source_columns if col["metadata"]["name"] == column_name),
-            None,
+        # First, find the specified column in the table
+        base_column = None
+        scroll_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata_type",
+                    match=models.MatchValue(value="columns"),
+                ),
+                models.FieldCondition(
+                    key="raw_metadata.name",
+                    match=models.MatchValue(value=column_name),
+                ),
+                models.FieldCondition(
+                    key="table_id",
+                    match=models.MatchValue(value=table_id),
+                ),
+            ]
         )
-        if not source_column:
+        
+        results = self.client.scroll(
+            collection_name=self.collection_name,
+            scroll_filter=scroll_filter,
+            limit=1,
+        )
+        
+        if not results[0]:
             raise ValueError(f"Column {column_name} not found in table {table_id}")
-
-        # Prepare search text from source column
-        search_text = self._prepare_text_for_embedding(
-            source_column["metadata"], "columns"
+            
+        base_column = results[0][0]
+        
+        # Now search for similar columns using the embedding
+        search_results = self.client.search(
+            collection_name=self.collection_name,
+            query_vector=base_column.vector,
+            query_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="metadata_type",
+                        match=models.MatchValue(value="columns"),
+                    ),
+                ]
+            ),
+            limit=limit + 1,  # Add 1 to account for the input column
         )
-
-        # Search for similar columns
-        results = self.search_metadata(
-            query=search_text,
-            embedding_provider=embedding_provider,
-            metadata_type="columns",
-            limit=limit + (1 if not exclude_same_table else 0),
-        )
-
-        # Filter out the source column if requested
-        if exclude_same_table:
-            results = [
-                r
-                for r in results
-                if r.get("table_id") != table_id
-                or r["metadata"]["name"] != column_name
-            ][:limit]
-
+        
+        # Format results, excluding the input column
+        results = []
+        for hit in search_results:
+            if hit.id != base_column.id:
+                results.append({
+                    "score": hit.score,
+                    "metadata": hit.payload["raw_metadata"],
+                    "table_id": hit.payload["table_id"],
+                })
+                if len(results) >= limit:
+                    break
+                    
         return results
 
     def _prepare_transformation_text(self, transformation: dict) -> str:
