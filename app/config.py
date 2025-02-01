@@ -1,34 +1,73 @@
 import os
 from pathlib import Path
+from typing import Dict, Optional
+
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 # Load environment variables from .env file if it exists
-env_path = Path('.env')
+env_path = Path(".env")
 if env_path.exists():
     load_dotenv(env_path)
+
+
+class Config(BaseModel):
+    """Configuration model for the application."""
+
+    storage_api_token: str
+    storage_api_url: str = "https://connection.keboola.com/v2/storage"
+    qdrant_host: str = "localhost"
+    qdrant_port: int = 55000
+    qdrant_collection: str = "keboola_metadata"
+    openai_api_key: Optional[str] = None
+    embedding_model: str = "all-MiniLM-L6-v2"
+    device: str = "cpu"
+
+    @classmethod
+    def from_env(cls) -> "Config":
+        """Create configuration from environment variables."""
+        return cls(
+            storage_api_token=os.getenv("KBC_STORAGE_TOKEN", ""),
+            storage_api_url=os.getenv(
+                "KBC_STORAGE_URL",
+                "https://connection.keboola.com/v2/storage",
+            ),
+            qdrant_host=os.getenv("QDRANT_HOST", "localhost"),
+            qdrant_port=int(os.getenv("QDRANT_PORT", "55000")),
+            qdrant_collection=os.getenv("QDRANT_COLLECTION", "keboola_metadata"),
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            embedding_model=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
+            device=os.getenv("DEVICE", "cpu"),
+        )
+
+    def to_dict(self) -> Dict:
+        """Convert configuration to dictionary."""
+        return self.model_dump()
+
 
 def load_config():
     """Load configuration from environment variables."""
     config = {
         # Keboola configuration
-        'KEBOOLA_API_URL': os.getenv('KEBOOLA_API_URL', 'https://connection.keboola.com'),
-        'KEBOOLA_TOKEN': os.getenv('KEBOOLA_TOKEN'),
-
+        "KEBOOLA_API_URL": os.getenv(
+            "KEBOOLA_API_URL", "https://connection.keboola.com"
+        ),
+        "KEBOOLA_TOKEN": os.getenv("KEBOOLA_TOKEN"),
         # OpenAI configuration (optional)
-        'OPENAI_API_KEY': os.getenv('OPENAI_API_KEY'),
-        'OPENAI_MODEL': os.getenv('OPENAI_MODEL', 'text-embedding-ada-002'),
-
+        "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
+        "OPENAI_MODEL": os.getenv("OPENAI_MODEL", "text-embedding-ada-002"),
         # Sentence Transformer configuration (optional)
-        'SENTENCE_TRANSFORMER_MODEL': os.getenv('SENTENCE_TRANSFORMER_MODEL', 'all-MiniLM-L6-v2'),
-
+        "SENTENCE_TRANSFORMER_MODEL": os.getenv(
+            "SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"
+        ),
         # Qdrant configuration
-        'QDRANT_HOST': os.getenv('QDRANT_HOST', 'localhost'),
-        'QDRANT_PORT': int(os.getenv('QDRANT_PORT', '55000')),
-        'QDRANT_COLLECTION': os.getenv('QDRANT_COLLECTION', 'keboola_metadata'),
+        "QDRANT_HOST": os.getenv("QDRANT_HOST", "localhost"),
+        "QDRANT_PORT": int(os.getenv("QDRANT_PORT", "55000")),
+        "QDRANT_COLLECTION": os.getenv("QDRANT_COLLECTION", "keboola_metadata"),
     }
 
     # Validate required configuration
-    if not config['KEBOOLA_TOKEN']:
+    if not config["KEBOOLA_TOKEN"]:
         raise ValueError("KEBOOLA_TOKEN environment variable is required")
 
     return config
