@@ -553,76 +553,81 @@ class QdrantIndexer:
         query: str,
         embedding_provider: EmbeddingProvider,
         metadata_type: Optional[str] = None,
+        component_type: Optional[str] = None,
         table_id: Optional[str] = None,
+        stage: Optional[str] = None,
         limit: int = 10,
     ) -> List[Dict]:
-        """
-        Search for metadata using semantic similarity.
-        
-        Args:
-            query: The search query
-            embedding_provider: Provider for generating embeddings
-            metadata_type: Optional type to filter results (e.g., "tables", "columns")
-            table_id: Optional table ID to filter results
-            limit: Maximum number of results to return
-            
-        Returns:
-            List of results with scores and metadata
-        """
+        """Search metadata using semantic search with enhanced filtering."""
         # Get query embedding
         query_embedding = embedding_provider.embed([query])[0]
-        
-        # Prepare search conditions
-        search_params = models.SearchParams(hnsw_ef=128, exact=False)
-        
-        # Prepare search filter
+
+        # Build filter conditions
         must_conditions = []
+        
         if metadata_type:
             must_conditions.append(
                 models.FieldCondition(
                     key="metadata_type",
-                    match=models.MatchValue(value=metadata_type),
+                    match=models.MatchValue(value=metadata_type)
                 )
             )
+        
+        if component_type:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="metadata.component.type",
+                    match=models.MatchValue(value=component_type)
+                )
+            )
+        
         if table_id:
             must_conditions.append(
                 models.FieldCondition(
-                    key="table_id",
-                    match=models.MatchValue(value=table_id),
+                    key="table_id" if metadata_type == "columns" else "metadata.id",
+                    match=models.MatchValue(value=table_id)
                 )
             )
         
-        query_filter = models.Filter(must=must_conditions) if must_conditions else None
-        
+        if stage:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="metadata.stage",
+                    match=models.MatchValue(value=stage)
+                )
+            )
+
+        # Create filter if any conditions exist
+        search_filter = None
+        if must_conditions:
+            search_filter = models.Filter(
+                must=must_conditions
+            )
+
         # Perform search
-        results = self.client.search(
+        search_results = self.client.search(
             collection_name=self.collection_name,
             query_vector=query_embedding,
             limit=limit,
-            query_filter=query_filter,
-            search_params=search_params,
+            query_filter=search_filter
         )
-        
+
         # Format results
-        formatted_results = []
-        for result in results:
-            formatted_result = {
-                "score": result.score,
-                "metadata_type": result.payload["metadata_type"],
-                "metadata": result.payload["raw_metadata"],
+        results = []
+        for hit in search_results:
+            result = {
+                "score": hit.score,
+                "metadata_type": hit.payload.get("metadata_type"),
+                "metadata": hit.payload.get("raw_metadata", {}),
             }
-            
-            # Add additional metadata if available
-            if "table_id" in result.payload:
-                formatted_result["table_id"] = result.payload["table_id"]
-            if "transformation_id" in result.payload:
-                formatted_result["transformation_id"] = result.payload["transformation_id"]
-            if "bucket_id" in result.payload:
-                formatted_result["bucket_id"] = result.payload["bucket_id"]
-            
-            formatted_results.append(formatted_result)
-        
-        return formatted_results
+            # Add additional metadata if present
+            if "transformation_id" in hit.payload:
+                result["transformation_id"] = hit.payload["transformation_id"]
+            if "table_id" in hit.payload:
+                result["table_id"] = hit.payload["table_id"]
+            results.append(result)
+
+        return results
 
     def find_table_columns(
         self,

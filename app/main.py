@@ -76,11 +76,19 @@ def search_metadata(
     indexer: QdrantIndexer,
     embedding_provider: EmbeddingProvider,
     metadata_type: Optional[str] = None,
+    component_type: Optional[str] = None,
+    table_id: Optional[str] = None,
+    stage: Optional[str] = None,
     limit: int = 10,
 ) -> List[Dict]:
-    """Search metadata using semantic search."""
+    """Search metadata using semantic search with enhanced filtering."""
     logging.info(
-        f"Searching for '{query}' " f"(type: {metadata_type or 'all'}, limit: {limit})"
+        f"Searching for '{query}' "
+        f"(type: {metadata_type or 'all'}, "
+        f"component_type: {component_type or 'all'}, "
+        f"table_id: {table_id or 'all'}, "
+        f"stage: {stage or 'all'}, "
+        f"limit: {limit})"
     )
 
     try:
@@ -88,6 +96,9 @@ def search_metadata(
             query=query,
             embedding_provider=embedding_provider,
             metadata_type=metadata_type,
+            component_type=component_type,
+            table_id=table_id,
+            stage=stage,
             limit=limit,
         )
         logging.info(f"Found {len(results)} results")
@@ -119,8 +130,16 @@ def index_command(config: Config, batch_config: BatchConfig):
     logging.info("Metadata extraction and indexing completed")
 
 
-def search_command(config: Config, query: str, metadata_type: Optional[str] = None, limit: int = 10):
-    """Command to search indexed metadata."""
+def search_command(
+    config: Config,
+    query: str,
+    metadata_type: Optional[str] = None,
+    component_type: Optional[str] = None,
+    table_id: Optional[str] = None,
+    stage: Optional[str] = None,
+    limit: int = 10
+):
+    """Command to search indexed metadata with enhanced filtering."""
     embedding_provider = get_embedding_provider(config)
     indexer = QdrantIndexer(
         collection_name=config.qdrant_collection
@@ -131,6 +150,9 @@ def search_command(config: Config, query: str, metadata_type: Optional[str] = No
         indexer=indexer,
         embedding_provider=embedding_provider,
         metadata_type=metadata_type,
+        component_type=component_type,
+        table_id=table_id,
+        stage=stage,
         limit=limit,
     )
 
@@ -180,6 +202,9 @@ def main():
     search_parser = subparsers.add_parser("search", help="Search indexed metadata")
     search_parser.add_argument("query", help="Search query")
     search_parser.add_argument("--type", help="Filter by metadata type (buckets, tables, configurations)")
+    search_parser.add_argument("--component-type", help="Filter by component type (e.g., extractor, writer, application)")
+    search_parser.add_argument("--table-id", help="Filter by specific table ID")
+    search_parser.add_argument("--stage", help="Filter by stage (in/out)")
     search_parser.add_argument("--limit", type=int, default=10, help="Maximum number of results")
 
     args = parser.parse_args()
@@ -197,7 +222,15 @@ def main():
         )
         index_command(config, batch_config)
     elif args.command == "search":
-        search_command(config, args.query, args.type, args.limit)
+        search_command(
+            config,
+            args.query,
+            args.type,
+            args.component_type,
+            args.table_id,
+            args.stage,
+            args.limit
+        )
     else:
         parser.print_help()
 

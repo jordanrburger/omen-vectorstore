@@ -190,6 +190,32 @@ The system supports various types of semantic searches with advanced filtering c
    python3 -m app.main search "Find processed data" \
      --type tables \
      --stage out
+     
+3. **Component Type Filtering**:
+   ```bash
+   # Search for extractor configurations
+   python3 -m app.main search "Find Google Analytics data" --type configurations --component-type extractor
+
+   # Search for writer configurations
+   python3 -m app.main search "Find Snowflake writers" --type configurations --component-type writer
+   ```
+
+4. **Table-Specific Search**:
+   ```bash
+   # Search for columns in a specific table
+   python3 -m app.main search "Find email columns" --table-id in.c-main.customers
+
+   # Search for transformations using a specific table
+   python3 -m app.main search "Find transformations" --type configurations --table-id in.c-main.customers
+   ```
+
+5. **Stage Filtering**:
+   ```bash
+   # Search input stage tables
+   python3 -m app.main search "Find raw data tables" --type tables --stage in
+
+   # Search output stage tables
+   python3 -m app.main search "Find processed data" --type tables --stage out
    ```
 
 6. **Combined Filtering**:
@@ -200,13 +226,6 @@ The system supports various types of semantic searches with advanced filtering c
      --component-type processor \
      --table-id in.c-main.customers \
      --limit 5
-
-   # Search for extractors with specific data
-   python3 -m app.main search "Find Salesforce data" \
-     --type configurations \
-     --component-type extractor \
-     --stage in \
-     --limit 3
    ```
 
 ### Understanding Search Results
@@ -438,6 +457,15 @@ This project is licensed under the MIT License - see the LICENSE file for detail
   - Cache implementation
 
 ### Future Enhancements
+### In Progress
+- 🔄 Enhanced metadata extraction for transformations
+- 🔄 Improved column-level search capabilities
+- 🔄 Advanced filtering options for search results
+- 🔄 Metadata relationship mapping
+- 🔄 Search result scoring optimization
+- 🔄 Performance tuning for large-scale deployments
+
+### Planned Features
 - 📋 Real-time metadata updates
 - 📋 Advanced recommendation system
 - 📋 Custom scoring functions
@@ -481,3 +509,8 @@ These metrics will inform:
 - Monitoring thresholds
 - Backup strategy
 - Scaling procedures
+- 📋 Automated testing for search filters
+- 📋 Search result caching
+- 📋 Advanced analytics and usage tracking
+- 📋 Custom plugin system for metadata processors
+- 📋 Integration with Keboola AI Assistant
