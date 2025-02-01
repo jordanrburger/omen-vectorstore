@@ -131,7 +131,7 @@ def mock_session():
 def client(mock_kbcstorage_client, mock_state_manager):
     """Create a client with mock dependencies for testing."""
     client = KeboolaClient(
-        api_url="https://connection.keboola.com/v2/storage/",
+        api_url="https://connection.keboola.com",
         token="test-token",
         state_manager=mock_state_manager
     )

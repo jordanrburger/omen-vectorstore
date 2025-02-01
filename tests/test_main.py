@@ -13,12 +13,13 @@ from app.main import (
 )
 from app.config import Config
 from app.vectorizer import OpenAIProvider, SentenceTransformerProvider
+from app.keboola_client import KeboolaClient
 
 @pytest.fixture
 def mock_config():
     config = Mock(spec=Config)
-    config.storage_api_url = "https://connection.keboola.com/v2/storage/"
-    config.storage_api_token = "test-token"
+    config.keboola_api_url = "https://connection.keboola.com"
+    config.keboola_token = "test-token"
     config.openai_api_key = "test-key"
     config.embedding_model = "text-embedding-3-small"
     config.qdrant_host = "localhost"
@@ -239,3 +240,13 @@ def test_main_no_command(mock_config, mock_args, capsys):
     main()
     captured = capsys.readouterr()
     assert "usage:" in captured.out 
+
+@patch('app.main.KeboolaClient')
+def test_client_initialization(mock_client, mock_config):
+    """Test client initialization with correct URL."""
+    client = KeboolaClient(
+        api_url=mock_config.keboola_api_url,
+        token=mock_config.keboola_token
+    )
+    assert client.url == "https://connection.keboola.com/v2/storage"
+    assert client.token == "test-token" 
