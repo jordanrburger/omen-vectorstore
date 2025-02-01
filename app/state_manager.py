@@ -84,9 +84,9 @@ class StateManager:
     ) -> bool:
         """Check if metadata has changed since last indexing."""
         stored_hash = self.get_metadata_hash(metadata_type, metadata_id)
-        if not stored_hash:
+        if stored_hash is None:
             return True
-
+            
         current_hash = self.compute_hash(current_data)
         return stored_hash != current_hash
 

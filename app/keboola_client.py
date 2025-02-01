@@ -8,7 +8,26 @@ from app.state_manager import StateManager
 
 
 class KeboolaClient:
-    """Client for interacting with the Keboola Storage API."""
+    """Client for interacting with the Keboola Storage API.
+    
+    This client handles metadata extraction, including tables, columns, configurations,
+    and transformations. It supports incremental updates by tracking state changes
+    and reusing unchanged metadata.
+    
+    Column Metadata Behavior:
+    - When a column's metadata changes (detected by hash comparison), the new metadata
+      completely replaces the old metadata
+    - The new metadata takes precedence over any existing fields
+    - This ensures that the metadata always reflects the current state of the column
+      in Keboola Storage
+    
+    Attributes:
+        client: The underlying Keboola Storage API client
+        state_manager: Manager for handling state and metadata persistence
+        token: The Keboola Storage API token
+        url: The Keboola Storage API URL
+        session: The requests session for API calls
+    """
 
     def __init__(
         self,
@@ -20,7 +39,7 @@ class KeboolaClient:
         self.client = Client(api_url, token)
         self.state_manager = state_manager or StateManager()
         self.token = token
-        self.url = api_url.rstrip("/")
+        self.url = api_url.rstrip("/") + "/v2/storage"
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -93,11 +112,15 @@ class KeboolaClient:
                 new_state["table_hashes"][table_id] = table_hash
 
                 # Check if table has changed
-                if (
-                    not force_full
-                    and previous_metadata
-                    and state["table_hashes"].get(table_id) == table_hash
-                ):
+                table_changed = (
+                    force_full
+                    or not previous_metadata
+                    or not state.get("table_hashes", {}).get(table_id)  # No previous hash
+                    or state["table_hashes"].get(table_id) != table_hash  # Hash changed
+                )
+
+                # If table hasn't changed, reuse previous metadata
+                if not table_changed:
                     # Reuse previous table metadata
                     metadata["tables"][bucket_id].append(table)
                     if table_id in previous_metadata["table_details"]:
@@ -108,24 +131,31 @@ class KeboolaClient:
                         metadata["columns"][bucket_id][table_id] = previous_metadata["columns"][bucket_id][table_id]
                     continue
 
+                # Table has changed, process all columns as new
                 metadata["tables"][bucket_id].append(table)
 
                 # Get fresh table details and process columns
                 details = self.get_table_details(table_id)
                 if details:
-                    metadata["table_details"][table_id] = details
                     # Extract and process columns
                     if "columns" in details:
                         metadata["columns"][bucket_id][table_id] = []
+                        enriched_columns = []
                         for column in details["columns"]:
                             column_id = f"{table_id}.{column.get('name', 'unknown')}"
-                            column_hash = self.state_manager.compute_hash(column)
-                            new_state["column_hashes"][column_id] = column_hash
-                            # Enrich column metadata with table context
-                            column["table_id"] = table_id
-                            column["bucket_id"] = bucket_id
-                            metadata["columns"][bucket_id][table_id].append(column)
+                            # When table has changed, create fresh metadata
+                            enriched_column = {}
+                            enriched_column.update(column)  # Apply new fields
+                            enriched_column["table_id"] = table_id
+                            enriched_column["bucket_id"] = bucket_id
+                            metadata["columns"][bucket_id][table_id].append(enriched_column)
+                            enriched_columns.append(enriched_column)
                             logging.debug(f"Processed column {column_id} for table {table_id}")
+
+                        # Update table details with enriched columns
+                        details = details.copy()
+                        details["columns"] = enriched_columns
+                    metadata["table_details"][table_id] = details
 
         # Extract configurations and their rows
         try:
@@ -382,9 +412,16 @@ class KeboolaClient:
             
         Returns:
             dict: Detailed transformation metadata including code blocks, dependencies, etc.
+            
+        Raises:
+            Exception: If there was an error fetching the transformation details.
         """
-        response = self.client.transformations.get(transformation_id)
-        return response
+        try:
+            response = self.client.transformations.get(transformation_id)
+            return response
+        except Exception as e:
+            logging.error("Error fetching transformation details for %s: %s", transformation_id, e)
+            raise
 
     def get_all_transformations(self) -> dict:
         """
@@ -394,11 +431,18 @@ class KeboolaClient:
             dict: Dictionary mapping transformation IDs to their metadata.
         """
         transformations = {}
-        response = self.client.transformations.list()
-        
-        for transformation in response:
-            transformation_id = transformation["id"]
-            details = self.get_transformation_details(transformation_id)
-            transformations[transformation_id] = details
+        try:
+            response = self.client.transformations.list()
+            
+            for transformation in response:
+                try:
+                    transformation_id = transformation["id"]
+                    details = self.get_transformation_details(transformation_id)
+                    transformations[transformation_id] = details
+                except Exception as e:
+                    logging.error("Error processing transformation %s: %s", transformation_id, e)
+                    continue
+        except Exception as e:
+            logging.error("Error fetching transformations: %s", e)
         
         return {"transformations": transformations}

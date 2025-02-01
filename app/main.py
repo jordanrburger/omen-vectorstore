@@ -102,8 +102,8 @@ def index_command(config: Config):
     # Initialize components
     state_manager = StateManager()
     client = KeboolaClient(
-        api_url=config.storage_api_url,
-        token=config.storage_api_token,
+        api_url=config.keboola_api_url,
+        token=config.keboola_token,
         state_manager=state_manager,
     )
     embedding_provider = get_embedding_provider(config)
