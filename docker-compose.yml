@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  qdrant:
+    image: qdrant/qdrant
+    ports:
+      - "55000:6333"  # REST API
+      - "55001:6334"  # GRPC
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      - QDRANT__STORAGE__WAL_CAPACITY_MB=512
+      - QDRANT__STORAGE__STORAGE_SIZE_MB=4096  # Allocate 4GB for storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  qdrant_storage:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/qdrant_data
+      o: bind
