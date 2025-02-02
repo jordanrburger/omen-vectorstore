@@ -35,6 +35,8 @@ ENV/
 
 # Project specific
 qdrant_data/
+qdrant_storage/
+qdrant_storage*/
 *.msgpack
 *.msgpack.gz
 *.zlib

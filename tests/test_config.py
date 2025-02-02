@@ -20,7 +20,7 @@ class TestConfig:
         assert config.keboola_token == ""
         assert config.keboola_api_url == "https://connection.keboola.com"
         assert config.qdrant_host == "localhost"
-        assert config.qdrant_port == 55000
+        assert config.qdrant_port == 6333
         assert config.qdrant_collection == "keboola_metadata"
         assert config.openai_api_key is None
         assert config.embedding_model == "text-embedding-ada-002"

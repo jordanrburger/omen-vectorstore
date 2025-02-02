@@ -24,7 +24,7 @@ class QdrantIndexer:
         """Initialize QdrantIndexer with collection name and batch configuration."""
         self.collection_name = collection_name
         self.vector_size = 1536  # OpenAI ada-002 embedding size
-        self.client = QdrantClient("localhost", port=55000)
+        self.client = QdrantClient("localhost", port=6333)
         self.batch_processor = BatchProcessor(batch_config or BatchConfig())
         self.ensure_collection()
 
@@ -248,11 +248,37 @@ class QdrantIndexer:
             parts.append(f"Name: {table['name']}")
         if "description" in table:
             parts.append(f"Description: {table['description']}")
-        if "type" in table:
-            parts.append(f"Type: {table['type']}")
-        if "tags" in table and table["tags"]:
-            parts.append(f"Tags: {', '.join(table['tags'])}")
-        return " | ".join(parts)
+        if "isLinked" in table and table["isLinked"]:
+            parts.append("Type: Linked Table")
+            if "sourceTable" in table:
+                source = table["sourceTable"]
+                parts.append(f"Source Table: {source.get('id', 'unknown')}")
+                if "project" in source:
+                    parts.append(f"Source Project: {source['project'].get('id', 'unknown')}")
+            if "sourceTableDetails" in table:
+                source_details = table["sourceTableDetails"]
+                if source_details.get("isAccessible", True):
+                    if "description" in source_details:
+                        parts.append(f"Source Description: {source_details['description']}")
+                else:
+                    parts.append("Source Table Status: Inaccessible")
+                    if "displayName" in source_details:
+                        parts.append(f"Source Display Name: {source_details['displayName']}")
+        if "rowsCount" in table:
+            parts.append(f"Rows: {table['rowsCount']}")
+        if "dataSizeBytes" in table:
+            parts.append(f"Size: {table['dataSizeBytes']} bytes")
+        if "bucket" in table:
+            parts.append(f"Bucket: {table['bucket'].get('id', 'unknown')}")
+        if "primaryKey" in table and table["primaryKey"]:
+            parts.append(f"Primary Key: {', '.join(table['primaryKey'])}")
+        if "created" in table:
+            parts.append(f"Created: {table['created']}")
+        if "lastImportDate" in table:
+            parts.append(f"Last Import: {table['lastImportDate']}")
+        if "lastChangeDate" in table:
+            parts.append(f"Last Change: {table['lastChangeDate']}")
+        return " | ".join(parts) if parts else "{}"
 
     def _prepare_column_text(self, column):
         """Prepare column metadata text."""
