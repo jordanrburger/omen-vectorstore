@@ -9,8 +9,8 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
     environment:
-      - QDRANT__STORAGE__WAL_CAPACITY_MB=512
-      - QDRANT__STORAGE__STORAGE_SIZE_MB=4096  # Allocate 4GB for storage
+      - QDRANT__STORAGE__WAL_CAPACITY_MB=2048  # Allocate 2GB for Write-Ahead Log
+      - QDRANT__STORAGE__STORAGE_SIZE_MB=20480  # Allocate 20GB for storage
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:6333/healthz", "||", "exit", "1"]
       interval: 10s
