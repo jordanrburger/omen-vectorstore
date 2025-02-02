@@ -85,3 +85,8 @@ cython_debug/
 .coverage.*
 .omen_state
 
+qdrant_storage/*
+
+# Keep reports directory but ignore its contents
+reports/*
+!reports/.gitkeep

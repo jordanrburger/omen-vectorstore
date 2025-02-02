@@ -65,3 +65,59 @@ class OpenAIProvider(EmbeddingProvider):
         except Exception as e:
             logging.error(f"Error generating embeddings: {e}")
             raise
+
+
+class MetadataVectorizer:
+    """Handles vectorization of metadata documents."""
+
+    def __init__(self, embedding_provider: EmbeddingProvider):
+        """Initialize with an embedding provider."""
+        self.embedding_provider = embedding_provider
+
+    def _prepare_text(self, metadata: dict) -> str:
+        """Prepare metadata for vectorization by converting to text."""
+        parts = []
+        
+        # Add type and name if available
+        if "type" in metadata:
+            parts.append(f"Type: {metadata['type']}")
+        if "name" in metadata:
+            parts.append(f"Name: {metadata['name']}")
+            
+        # Add description if available
+        if "description" in metadata:
+            parts.append(f"Description: {metadata['description']}")
+            
+        # Add columns information if available
+        if "columns" in metadata and isinstance(metadata["columns"], list):
+            column_info = []
+            for col in metadata["columns"]:
+                if isinstance(col, dict):
+                    col_name = col.get("name", "")
+                    col_type = col.get("type", "")
+                    if col_name and col_type:
+                        column_info.append(f"{col_name} ({col_type})")
+            if column_info:
+                parts.append("Columns: " + ", ".join(column_info))
+                
+        # Add row count if available
+        if "row_count" in metadata:
+            parts.append(f"Row count: {metadata['row_count']}")
+            
+        # Add creation date if available
+        if "created" in metadata:
+            parts.append(f"Created: {metadata['created']}")
+            
+        # Combine all parts with newlines
+        return "\n".join(parts)
+
+    def vectorize(self, metadata: dict) -> List[float]:
+        """Convert metadata to vector representation."""
+        text = self._prepare_text(metadata)
+        vectors = self.embedding_provider.embed([text])
+        return vectors[0]  # Return the first (and only) vector
+
+    def vectorize_batch(self, metadata_list: List[dict]) -> List[List[float]]:
+        """Convert a batch of metadata to vector representations."""
+        texts = [self._prepare_text(metadata) for metadata in metadata_list]
+        return self.embedding_provider.embed(texts)

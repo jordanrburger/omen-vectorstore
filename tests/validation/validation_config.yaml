@@ -1,0 +1,52 @@
+# Validation Test Configuration
+
+performance:
+  # Query performance targets
+  query_latency_p95_ms: 100
+  batch_index_time_per_item_s: 1
+  concurrent_searches: 50
+  concurrent_search_latency_p95_ms: 200
+  max_latency_ms: 500
+
+  # Batch processing targets
+  batch_size: 100
+  max_batch_processing_time_s: 120
+  batch_memory_threshold_mb: 1024
+
+memory:
+  # Memory usage limits
+  max_index_memory_mb: 1000
+  max_search_memory_mb: 500
+  max_total_memory_mb: 2048
+
+test_data:
+  # Test data sizes
+  small_batch_size: 100
+  large_batch_size: 1000
+  concurrent_test_size: 100
+  
+  # Test data variety
+  metadata_types:
+    - table
+    - column
+    - transformation
+    - configuration
+  
+  # Test query patterns
+  query_patterns:
+    - "find tables with {attribute}"
+    - "show me tables with more than {number} rows"
+    - "find columns containing {data_type}"
+    - "tables created in {time_period}"
+    - "transformations using {component}"
+
+logging:
+  # Logging configuration for validation tests
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  output_dir: "validation_logs"
+
+cleanup:
+  # Cleanup configuration
+  remove_collections: true
+  cleanup_interval: 300  # seconds 
