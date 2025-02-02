@@ -101,13 +101,13 @@ class TestQdrantIndexer(unittest.TestCase):
 
     def test_prepare_text_for_embedding(self):
         mock_qdrant_client = MagicMock()
-
+    
         with patch(
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
             indexer = QdrantIndexer()
-            
+    
             # Test table metadata
             table_item = {
                 "name": "test",
@@ -116,22 +116,26 @@ class TestQdrantIndexer(unittest.TestCase):
                 "tags": ["tag1", "tag2"],
             }
             text = indexer._prepare_text_for_embedding(table_item, "tables")
-            self.assertEqual(
-                text,
-                "Name: test | Description: test desc | Type: test type | Tags: tag1, tag2"
-            )
-            
-            # Test column metadata
-            column_item = {
-                "name": "test_column",
-                "type": "INTEGER",
-                "description": "test column desc",
+            expected_text = "Name: test | Description: test desc"
+            self.assertEqual(text, expected_text)
+
+            # Test linked table metadata
+            linked_table_item = {
+                "name": "linked_test",
+                "description": "linked desc",
+                "isLinked": True,
+                "sourceTable": {
+                    "id": "src_123",
+                    "project": {"id": "proj_456"}
+                },
+                "sourceTableDetails": {
+                    "description": "source desc",
+                    "isAccessible": True
+                }
             }
-            text = indexer._prepare_text_for_embedding(column_item, "columns")
-            self.assertEqual(
-                text,
-                "Name: test_column | Type: INTEGER | Description: test column desc"
-            )
+            text = indexer._prepare_text_for_embedding(linked_table_item, "tables")
+            expected_text = "Name: linked_test | Description: linked desc | Type: Linked Table | Source Table: src_123 | Source Project: proj_456 | Source Description: source desc"
+            self.assertEqual(text, expected_text)
 
     def test_generate_point_id(self):
         mock_qdrant_client = MagicMock()

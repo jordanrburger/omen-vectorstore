@@ -1,0 +1,32 @@
+{
+  "timestamp": "2025-02-01T17:55:58.961108",
+  "query_latency": {
+    "p50": 6.068944931030273,
+    "p95": 7.190549373626709,
+    "p99": 8.592851161956794,
+    "min": 5.390167236328125,
+    "max": 9.986162185668945,
+    "mean": 6.2447357177734375,
+    "std": 0.6434748945966279,
+    "sample_size": 100
+  },
+  "concurrent_operations": {
+    "success": true,
+    "total_operations": 5,
+    "mean_operation_time": 0.08817801475524903,
+    "max_operation_time": 0.09174895286560059,
+    "min_operation_time": 0.0812520980834961
+  },
+  "batch_indexing": {
+    "total_time": 0.80936598777771,
+    "records_per_second": 1235.5349929464137,
+    "total_records": 1000
+  },
+  "memory_usage": {
+    "initial_mb": 724.09375,
+    "peak_mb": 736.703125,
+    "mean_mb": 736.703125,
+    "std_mb": 0.0,
+    "total_samples": 100
+  }
+}
