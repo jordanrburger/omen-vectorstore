@@ -273,10 +273,46 @@ class KeboolaClient:
             )
 
     def get_table_details(self, table_id: str) -> Optional[Dict]:
-        """Fetch and return the details of a specific table."""
+        """Fetch and return the details of a specific table.
+        
+        For linked tables, this will include both the source and target information.
+        The source table details are included in the 'sourceTable' field.
+        If the source table is inaccessible (e.g., in a different project), we'll
+        still include the basic source table information without the details.
+        """
         try:
             details = self.client.tables.detail(table_id)
             logging.info("Fetched details for table %s", table_id)
+            
+            # Handle linked tables
+            if "sourceTable" in details:
+                source_table_id = details["sourceTable"]["id"]
+                try:
+                    # Get source table details
+                    source_details = self.client.tables.detail(source_table_id)
+                    # Enrich the details with source information
+                    details["isLinked"] = True
+                    details["sourceTableDetails"] = source_details
+                    details["columns"] = source_details.get("columns", [])  # Use source table columns
+                    logging.info("Enriched linked table %s with source table %s details", 
+                               table_id, source_table_id)
+                except Exception as e:
+                    # Source table is inaccessible (e.g., in a different project)
+                    logging.warning("Could not fetch source table details for %s: %s", 
+                                  source_table_id, e)
+                    # Still mark as linked and include basic source info
+                    details["isLinked"] = True
+                    details["sourceTableDetails"] = {
+                        "id": source_table_id,
+                        "project": details["sourceTable"].get("project", {}),
+                        "bucket": details["sourceTable"].get("bucket", {}),
+                        "displayName": details["sourceTable"].get("displayName", ""),
+                        "isAccessible": False
+                    }
+                    # Keep any existing columns or use empty list
+                    if "columns" not in details:
+                        details["columns"] = []
+            
             return details
         except Exception as e:
             logging.error("Error fetching table details for table %s: %s", table_id, e)

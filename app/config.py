@@ -18,7 +18,7 @@ class Config(BaseModel):
     keboola_token: str = Field(default="")
     keboola_api_url: str = Field(default="https://connection.keboola.com")
     qdrant_host: str = Field(default="localhost")
-    qdrant_port: int = Field(default=55000)
+    qdrant_port: int = Field(default=6333)
     qdrant_collection: str = Field(default="keboola_metadata")
     openai_api_key: Optional[str] = Field(default=None)
     embedding_model: str = Field(default="text-embedding-ada-002")
@@ -32,7 +32,7 @@ class Config(BaseModel):
             keboola_token=get_env_or_default("KEBOOLA_TOKEN", ""),
             keboola_api_url=get_env_or_default("KEBOOLA_API_URL", "https://connection.keboola.com"),
             qdrant_host=get_env_or_default("QDRANT_HOST", "localhost"),
-            qdrant_port=int(get_env_or_default("QDRANT_PORT", "55000")),
+            qdrant_port=int(get_env_or_default("QDRANT_PORT", "6333")),
             qdrant_collection=get_env_or_default("QDRANT_COLLECTION", "keboola_metadata"),
             openai_api_key=get_env_or_default("OPENAI_API_KEY"),
             embedding_model=get_env_or_default("OPENAI_MODEL", "text-embedding-ada-002"),
@@ -58,6 +58,6 @@ def load_config() -> Dict:
         "OPENAI_MODEL": get_env_or_default("OPENAI_MODEL", "text-embedding-ada-002"),
         "SENTENCE_TRANSFORMER_MODEL": get_env_or_default("SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"),
         "QDRANT_HOST": get_env_or_default("QDRANT_HOST", "localhost"),
-        "QDRANT_PORT": int(get_env_or_default("QDRANT_PORT", "55000")),
+        "QDRANT_PORT": int(get_env_or_default("QDRANT_PORT", "6333")),
         "QDRANT_COLLECTION": get_env_or_default("QDRANT_COLLECTION", "keboola_metadata"),
     }
