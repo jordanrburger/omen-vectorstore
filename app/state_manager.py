@@ -1,3 +1,4 @@
+"""State management for incremental updates."""
 import hashlib
 import json
 import logging
@@ -6,38 +7,41 @@ from typing import Dict, Optional
 
 
 class StateManager:
-    """Manages state persistence for the application."""
+    """Manages state for incremental updates."""
 
-    def __init__(self, state_file: str = ".omen_state"):
-        """Initialize the state manager with a state file path."""
+    def __init__(self, state_file: str = "state.json"):
+        """Initialize state manager.
+        
+        Args:
+            state_file: Path to state file
+        """
         self.state_file = state_file
         self.state = self._load_state()
 
     def _load_state(self) -> Dict:
-        """Load state from file or return empty state."""
+        """Load state from file."""
         if os.path.exists(self.state_file):
             try:
                 with open(self.state_file, "r") as f:
                     return json.load(f)
             except Exception as e:
-                logging.warning(f"Error loading state from {self.state_file}: {e}")
-                return {}
+                logging.warning(f"Error loading state file: {e}")
         return {}
 
     def _save_state(self) -> None:
-        """Save current state to file."""
+        """Save state to file."""
         try:
             with open(self.state_file, "w") as f:
-                json.dump(self.state, f, indent=2)
+                json.dump(self.state, f)
         except Exception as e:
-            logging.error(f"Error saving state to {self.state_file}: {e}")
+            logging.error(f"Error saving state file: {e}")
 
     def load_extraction_state(self) -> Dict:
-        """Load the extraction state."""
+        """Load the previous extraction state."""
         return self.state.get("extraction_state", {})
 
     def save_extraction_state(self, state: Dict) -> None:
-        """Save the extraction state."""
+        """Save the current extraction state."""
         self.state["extraction_state"] = state
         self._save_state()
 

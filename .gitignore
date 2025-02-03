@@ -85,3 +85,4 @@ cython_debug/
 .coverage.*
 .omen_state
 
+state.json

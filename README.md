@@ -1,30 +1,74 @@
-# Omen Vectorstore - Metadata Ingestion & Recommendation System
+# Omen Vectorstore - Multi-tenant Metadata Ingestion & Recommendation System
 
-This project indexes metadata from a Keboola project using the Keboola Storage API and ingests it into a local Qdrant vector database. The goal is to expose a rich ecosystem of metadata for fast, semantically rich search and recommendation capabilities for AI-driven applications.
+This project indexes metadata from Keboola projects using the Keboola Storage API and ingests it into a Qdrant vector database. The goal is to expose a rich ecosystem of metadata for fast, semantically rich search and recommendation capabilities for AI-driven applications, with support for multiple tenants.
 
 ## Overview
 
 The system performs the following steps:
 
 1. **Metadata Extraction**
-   - Fetch buckets, tables, and table details from Keboola using the [Keboola SAPI Python Client](https://github.com/keboola/sapi-python-client).
-   - Extract column metadata including statistics and quality metrics.
-   - Extract transformation metadata including code blocks and dependencies.
+   - Fetch comprehensive metadata from Keboola using the [Keboola SAPI Python Client](https://github.com/keboola/sapi-python-client)
+   - Extract rich column metadata including statistics, quality metrics, and relationships
+   - Track data freshness and quality scores
+   - Maintain relationship mappings between tables and columns
+   - Support incremental updates with state management
 
 2. **Metadata Processing and Vectorization**
-   - Normalize and combine metadata fields (e.g., title, description, tags) into documents.
-   - Convert documents into embeddings using OpenAI's text-embedding-ada-002 model.
-   - Process transformation code blocks to extract key operations and dependencies.
+   - Normalize and combine metadata fields with rich context
+   - Generate quality scores for tables and columns
+   - Track relationships and dependencies
+   - Convert enriched metadata into embeddings using OpenAI's text-embedding-ada-002 model
+   - Process transformation code blocks to extract key operations and dependencies
+   - Support batch processing with automatic retries
 
-3. **Indexing into Qdrant**
-   - Connect to a locally running Qdrant instance (dashboard: [http://localhost:55000/dashboard](http://localhost:55000/dashboard)).
-   - Store and index embeddings along with metadata for fast nearest-neighbor search.
-   - Optimized batch processing with automatic retries and storage management.
+3. **Multi-tenant Indexing into Qdrant**
+   - Connect to Qdrant with support for both local and cloud deployments
+   - Store and index embeddings in tenant-specific collections
+   - Optimized batch processing with automatic retries
+   - Complete tenant isolation for data security
+   - Track metadata relationships and dependencies
+   - Support incremental updates and state management
 
 4. **Search and Recommendation API**
-   - Provide semantic search capabilities for finding relevant metadata.
-   - Support filtering by metadata type (buckets, tables, configurations, etc.).
-   - Return semantically similar results ranked by relevance score.
+   - Provide tenant-specific semantic search capabilities
+   - Support filtering by metadata type, quality scores, and relationships
+   - Enable finding related items (tables, columns, transformations)
+   - Return semantically similar results ranked by relevance
+   - Support relationship-based queries
+   - Include quality metrics in search results
+
+## Features
+
+### Metadata Extraction
+- Comprehensive metadata extraction from Keboola Storage API
+- Rich column statistics and quality metrics
+- Data freshness tracking and scoring
+- Relationship detection and mapping
+- Incremental updates with state management
+- Error handling with retries and backoff
+
+### Metadata Processing
+- Quality score calculation for tables and columns
+- Relationship inference and validation
+- Rich text embeddings with context
+- Batch processing optimization
+- Automatic retry mechanisms
+- State management for incremental updates
+
+### Search Capabilities
+- Semantic search across all metadata types
+- Quality score-based filtering
+- Relationship-based queries
+- Finding related items
+- Rich context in search results
+- Configurable relevance scoring
+
+### Multi-tenancy
+- Complete tenant isolation
+- Tenant-specific collections
+- Secure access control
+- Collection management tools
+- Usage monitoring and analytics
 
 ## Quick Start Guide
 
@@ -38,19 +82,16 @@ Follow these steps to get up and running quickly:
 
 2. **Set Up Qdrant**:
    ```bash
-   # Create data directory
+   # For local development:
    mkdir -p qdrant_data
-   
-   # Start Qdrant
    docker-compose up -d qdrant
    
-   # Verify it's running
-   curl http://localhost:55000/dashboard
+   # For production (GCP):
+   # Use the provided GCP instance with proper authentication
    ```
 
 3. **Install Dependencies**:
    ```bash
-   # Install all required packages
    pip3 install -r requirements.txt
    ```
 
@@ -64,6 +105,11 @@ Follow these steps to get up and running quickly:
    KEBOOLA_TOKEN=your-keboola-storage-api-token
    KEBOOLA_API_URL=https://connection.keboola.com
    OPENAI_API_KEY=your-openai-api-key
+   
+   # Qdrant Configuration:
+   QDRANT_HOST=http://localhost:6333  # For local development
+   # QDRANT_HOST=https://your-gcp-instance:6333  # For GCP deployment
+   QDRANT_API_KEY=your-qdrant-api-key  # Required for GCP deployment
    ```
 
 5. **Extract and Index Metadata**:
@@ -91,39 +137,63 @@ Follow these steps to get up and running quickly:
 
 ## CLI Usage
 
-The application provides a command-line interface with two main commands:
+The application provides a command-line interface with the following commands:
 
 ### Index Command
 ```bash
-python3 -m app.main index [options]
+python3 -m app.main index --tenant-id <tenant_id> [options]
 ```
 
 Options:
-- `--batch-size`: Number of items to process in each batch (default: 10)
-- `--max-retries`: Maximum number of retry attempts for failed operations (default: 3)
-- `--retry-delay`: Initial delay between retries in seconds (default: 1.0)
-
-The indexing process includes:
-- Extracting metadata from Keboola Storage API
-- Converting metadata to embeddings
-- Storing in Qdrant with optimized batch processing
-- Automatic retries for failed operations
+- `--tenant-id`: Required. Unique identifier for the tenant
+- `--batch-size`: Number of items to process in each batch (default: 100)
+- `--max-retries`: Maximum number of retry attempts (default: 3)
+- `--retry-delay`: Delay between retries in seconds (default: 1)
 
 ### Search Command
 ```bash
-python3 -m app.main search <query> [options]
+python3 -m app.main search --tenant-id <tenant_id> --query "<query>" [options]
 ```
 
 Options:
-- `--type`: Filter by metadata type (buckets, tables, configurations)
-- `--limit`: Maximum number of results to return (default: 10)
+- `--tenant-id`: Required. Tenant identifier for search
+- `--query`: Required. Search query text
+- `--limit`: Maximum number of results (default: 5)
+- `--metadata-type`: Filter by type (bucket, table, column, transformation)
+- `--min-score`: Minimum similarity score threshold
 
-Search results include:
-- Relevance score
-- Metadata type
-- ID and name
-- Description (if available)
-- Additional type-specific metadata
+### Tenant Management Commands
+```bash
+# List all tenant collections
+python3 -m app.main tenant list
+
+# Delete a tenant's collection
+python3 -m app.main tenant delete --tenant-id <tenant_id>
+```
+
+## Multi-tenancy Features
+
+The system provides complete tenant isolation with the following features:
+
+1. **Tenant-specific Collections**:
+   - Each tenant's data is stored in a separate Qdrant collection
+   - Collection names follow the pattern: `{tenant_id}_metadata`
+   - Automatic collection creation and management
+
+2. **Data Isolation**:
+   - Complete separation of tenant data
+   - No cross-tenant data access
+   - Tenant-specific metadata tracking
+
+3. **Collection Management**:
+   - List all tenant collections with statistics
+   - Delete tenant collections safely
+   - Monitor collection sizes and vector counts
+
+4. **Security**:
+   - API key authentication for cloud deployments
+   - Tenant-level access control
+   - Secure collection management
 
 ## Advanced Usage
 

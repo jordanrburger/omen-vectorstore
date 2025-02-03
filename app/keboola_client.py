@@ -1,7 +1,6 @@
 import logging
-from typing import Dict, Generator, List, Optional
+from typing import Dict, Generator, List, Optional, Iterator
 
-import requests
 from kbcstorage.client import Client
 
 from app.state_manager import StateManager
@@ -24,41 +23,36 @@ class KeboolaClient:
     Attributes:
         client: The underlying Keboola Storage API client
         state_manager: Manager for handling state and metadata persistence
-        token: The Keboola Storage API token
-        url: The Keboola Storage API URL
-        session: The requests session for API calls
     """
 
-    def __init__(
-        self,
-        api_url: str,
-        token: str,
-        state_manager: Optional[StateManager] = None,
-    ):
-        """Initialize the Keboola Client with API URL and token."""
+    def __init__(self, api_url: str, token: str):
+        """Initialize Keboola client.
+        
+        Args:
+            api_url: Keboola Storage API URL
+            token: Keboola Storage API token
+        """
         self.client = Client(api_url, token)
-        self.state_manager = state_manager or StateManager()
-        self.token = token
-        self.url = api_url.rstrip("/") + "/v2/storage"
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "X-StorageApi-Token": self.token,
-                "User-Agent": "omen-vectorstore/1.0.0",
-            }
-        )
+        self.state_manager = StateManager()
         logging.info("Initialized KeboolaClient with API URL: %s", api_url)
 
     def extract_metadata(self, force_full: bool = False) -> Dict:
-        """Extract metadata with support for incremental updates."""
+        """Extract metadata with support for incremental updates.
+        
+        Args:
+            force_full: Whether to force a full extraction
+            
+        Returns:
+            Dictionary containing extracted metadata
+        """
         logging.info("Starting metadata extraction (force_full=%s)", force_full)
-
+        
         # Load previous state and metadata
         state = self.state_manager.load_extraction_state()
         previous_metadata = (
             self.state_manager.load_metadata() if not force_full else None
         )
-
+        
         # Initialize new state and metadata
         new_state = {
             "bucket_hashes": {},
@@ -75,13 +69,13 @@ class KeboolaClient:
             "config_rows": {},
             "columns": {},
         }
-
+        
         # Extract buckets and their metadata
         for bucket in self.list_buckets_paginated():
             bucket_id = bucket.get("id", "unknown")
             bucket_hash = self.state_manager.compute_hash(bucket)
             new_state["bucket_hashes"][bucket_id] = bucket_hash
-
+            
             # Check if bucket has changed
             if (
                 not force_full
@@ -99,9 +93,9 @@ class KeboolaClient:
                 if bucket_id in previous_metadata.get("columns", {}):
                     metadata["columns"][bucket_id] = previous_metadata["columns"][bucket_id]
                 continue
-
+                
             metadata["buckets"].append(bucket)
-
+            
             # Extract tables for this bucket
             metadata["tables"][bucket_id] = []
             metadata["columns"][bucket_id] = {}
@@ -110,67 +104,47 @@ class KeboolaClient:
                 table_id = table.get("id", "unknown")
                 table_hash = self.state_manager.compute_hash(table)
                 new_state["table_hashes"][table_id] = table_hash
-
+                
                 # Check if table has changed
-                table_changed = (
-                    force_full
-                    or not previous_metadata
-                    or not state.get("table_hashes", {}).get(table_id)  # No previous hash
-                    or state["table_hashes"].get(table_id) != table_hash  # Hash changed
-                )
-
-                # If table hasn't changed, reuse previous metadata
-                if not table_changed:
+                if (
+                    not force_full
+                    and previous_metadata
+                    and state["table_hashes"].get(table_id) == table_hash
+                ):
                     # Reuse previous table metadata
                     metadata["tables"][bucket_id].append(table)
-                    if table_id in previous_metadata["table_details"]:
+                    if table_id in previous_metadata.get("table_details", {}):
                         metadata["table_details"][table_id] = previous_metadata[
                             "table_details"
                         ][table_id]
-                    if table_id in previous_metadata.get("columns", {}).get(bucket_id, {}):
-                        metadata["columns"][bucket_id][table_id] = previous_metadata["columns"][bucket_id][table_id]
                     continue
-
-                # Table has changed, process all columns as new
+                    
                 metadata["tables"][bucket_id].append(table)
-
-                # Get fresh table details and process columns
-                details = self.get_table_details(table_id)
-                if details:
-                    # Extract and process columns
-                    if "columns" in details:
-                        metadata["columns"][bucket_id][table_id] = []
-                        enriched_columns = []
-                        for column in details["columns"]:
-                            column_id = f"{table_id}.{column.get('name', 'unknown')}"
-                            # When table has changed, create fresh metadata
-                            enriched_column = {}
-                            enriched_column.update(column)  # Apply new fields
-                            enriched_column["table_id"] = table_id
-                            enriched_column["bucket_id"] = bucket_id
-                            metadata["columns"][bucket_id][table_id].append(enriched_column)
-                            enriched_columns.append(enriched_column)
-                            logging.debug(f"Processed column {column_id} for table {table_id}")
-
-                        # Update table details with enriched columns
-                        details = details.copy()
-                        details["columns"] = enriched_columns
-                    metadata["table_details"][table_id] = details
-
+                
+                # Get detailed table information
+                table_detail = self.get_table_details(table_id)
+                if table_detail:
+                    metadata["table_details"][table_id] = table_detail
+                    
+                    # Extract column metadata
+                    metadata["columns"][bucket_id][table_id] = table_detail.get(
+                        "columns", []
+                    )
+                    
         # Extract configurations and their rows
         try:
             components = self.client.components.list()
             for component in components:
                 component_id = component.get("id")
                 metadata["configurations"][component_id] = []
-
+                
                 try:
                     configs = list(self.list_configurations_paginated(component_id))
                     for config in configs:
                         config_id = config.get("id")
                         config_hash = self.state_manager.compute_hash(config)
                         new_state["config_hashes"][config_id] = config_hash
-
+                        
                         # Check if configuration has changed
                         if (
                             not force_full
@@ -186,9 +160,9 @@ class KeboolaClient:
                                     "config_rows"
                                 ][config_id]
                             continue
-
+                            
                         metadata["configurations"][component_id].append(config)
-
+                        
                         # Get configuration rows if supported
                         try:
                             metadata["config_rows"][config_id] = []
@@ -210,113 +184,42 @@ class KeboolaClient:
                     )
         except Exception as e:
             logging.error(f"Error fetching components: {e}")
-
+            
         # Save new state and metadata
         self.state_manager.save_extraction_state(new_state)
         self.state_manager.save_metadata(metadata)
-
-        return metadata
-
-    def list_buckets_paginated(
-        self, offset: int = 0, limit: int = 100
-    ) -> Generator[Dict, None, None]:
-        """Fetch and yield buckets."""
-        try:
-            buckets = self.client.buckets.list()
-            for bucket in buckets:
-                yield bucket
-        except Exception as e:
-            logging.error("Error fetching buckets: %s", e)
-
-    def list_tables_paginated(
-        self, bucket_id: str, offset: int = 0, limit: int = 100
-    ) -> Generator[Dict, None, None]:
-        """Fetch and yield tables."""
-        try:
-            tables = self.client.buckets.list_tables(bucket_id)
-            for table in tables:
-                yield table
-        except Exception as e:
-            logging.error(f"Error fetching tables for bucket {bucket_id}: {e}")
-
-    def list_configurations_paginated(
-        self, component_id: str, offset: int = 0, limit: int = 100
-    ) -> Generator[Dict, None, None]:
-        """Fetch and yield configurations."""
-        try:
-            configs = self.client.components.list_configs(component_id)
-            for config in configs:
-                yield config
-        except Exception as e:
-            logging.error(
-                f"Error fetching configurations for component {component_id}: {e}"
-            )
-
-    def list_config_rows_paginated(
-        self,
-        component_id: str,
-        config_id: str,
-        offset: int = 0,
-        limit: int = 100,
-    ) -> Generator[Dict, None, None]:
-        """Fetch and yield configuration rows."""
-        try:
-            rows = self.client.components.list_config_rows(
-                component_id,
-                config_id,
-            )
-            for row in rows:
-                yield row
-        except Exception as e:
-            logging.error(
-                f"Error fetching configuration rows for config {config_id}: {e}"
-            )
-
-    def get_table_details(self, table_id: str) -> Optional[Dict]:
-        """Fetch and return the details of a specific table.
         
-        For linked tables, this will include both the source and target information.
-        The source table details are included in the 'sourceTable' field.
-        If the source table is inaccessible (e.g., in a different project), we'll
-        still include the basic source table information without the details.
-        """
+        return metadata
+        
+    def list_buckets_paginated(self) -> Iterator[Dict]:
+        """List all buckets with pagination."""
+        return self.client.buckets.list()
+        
+    def list_tables_paginated(self, bucket_id: str) -> Iterator[Dict]:
+        """List all tables in a bucket with pagination."""
+        all_tables = self.client.tables.list()
+        return (table for table in all_tables if table.get("bucket", {}).get("id") == bucket_id)
+        
+    def get_table_details(self, table_id: str) -> Optional[Dict]:
+        """Get detailed information about a table."""
         try:
-            details = self.client.tables.detail(table_id)
-            logging.info("Fetched details for table %s", table_id)
-            
-            # Handle linked tables
-            if "sourceTable" in details:
-                source_table_id = details["sourceTable"]["id"]
-                try:
-                    # Get source table details
-                    source_details = self.client.tables.detail(source_table_id)
-                    # Enrich the details with source information
-                    details["isLinked"] = True
-                    details["sourceTableDetails"] = source_details
-                    details["columns"] = source_details.get("columns", [])  # Use source table columns
-                    logging.info("Enriched linked table %s with source table %s details", 
-                               table_id, source_table_id)
-                except Exception as e:
-                    # Source table is inaccessible (e.g., in a different project)
-                    logging.warning("Could not fetch source table details for %s: %s", 
-                                  source_table_id, e)
-                    # Still mark as linked and include basic source info
-                    details["isLinked"] = True
-                    details["sourceTableDetails"] = {
-                        "id": source_table_id,
-                        "project": details["sourceTable"].get("project", {}),
-                        "bucket": details["sourceTable"].get("bucket", {}),
-                        "displayName": details["sourceTable"].get("displayName", ""),
-                        "isAccessible": False
-                    }
-                    # Keep any existing columns or use empty list
-                    if "columns" not in details:
-                        details["columns"] = []
-            
-            return details
+            return self.client.tables.detail(table_id)
         except Exception as e:
-            logging.error("Error fetching table details for table %s: %s", table_id, e)
+            logging.error(f"Error getting details for table {table_id}: {e}")
             return None
+            
+    def list_configurations_paginated(self, component_id: str) -> Iterator[Dict]:
+        """List all configurations for a component with pagination."""
+        return self.client.components.list_configurations(component_id)
+        
+    def list_config_rows_paginated(
+        self, component_id: str, config_id: str
+    ) -> Iterator[Dict]:
+        """List all configuration rows with pagination."""
+        return self.client.components.list_configuration_rows(
+            component_id=component_id,
+            config_id=config_id
+        )
 
     def list_buckets(self, include_deleted: bool = False) -> List[Dict]:
         """List all buckets in the project."""

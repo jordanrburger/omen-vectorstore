@@ -1,8 +1,11 @@
 import logging
 import uuid
+import os
 from typing import Dict, List, Optional, Callable, Any, Union
 from functools import partial
 import json
+import datetime
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
@@ -18,21 +21,63 @@ class QdrantIndexer:
 
     def __init__(
         self,
-        collection_name: str = "keboola_metadata",
+        tenant_id: str,
+        collection_name: Optional[str] = None,
         batch_config: Optional[BatchConfig] = None,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        api_key: Optional[str] = None,
+        url: Optional[str] = None,
     ):
-        """Initialize QdrantIndexer with collection name and batch configuration."""
-        self.collection_name = collection_name
+        """Initialize QdrantIndexer with tenant and collection configuration.
+        
+        Args:
+            tenant_id: Unique identifier for the tenant
+            collection_name: Optional name of the Qdrant collection (defaults to tenant_id_metadata)
+            batch_config: Optional batch processing configuration
+            host: Optional Qdrant host (defaults to env var QDRANT_HOST or "localhost")
+            port: Optional Qdrant port (defaults to env var QDRANT_PORT or 6333)
+            api_key: Optional Qdrant API key (defaults to env var QDRANT_API_KEY)
+            url: Optional complete Qdrant URL (defaults to env var QDRANT_URL)
+                If provided, overrides host and port settings
+        """
+        self.tenant_id = tenant_id
+        self.collection_name = collection_name or f"{tenant_id}_metadata"
         self.vector_size = 1536  # OpenAI ada-002 embedding size
-        self.client = QdrantClient("localhost", port=6333)
-        self.batch_processor = BatchProcessor(batch_config or BatchConfig())
-        self.ensure_collection()
-
-    def ensure_collection(self) -> None:
-        """Ensure the collection exists with the correct configuration."""
+        self.batch_config = batch_config or BatchConfig(
+            batch_size=100,
+            max_retries=3,
+            initial_retry_delay=1.0
+        )
+        
+        # Initialize client based on provided configuration or environment variables
+        if url or os.getenv("QDRANT_URL"):
+            self.client = QdrantClient(
+                url=url or os.getenv("QDRANT_URL"),
+                api_key=api_key or os.getenv("QDRANT_API_KEY"),
+                timeout=30  # Increased timeout for batch operations
+            )
+        else:
+            self.client = QdrantClient(
+                host=host or os.getenv("QDRANT_HOST", "localhost"),
+                port=port or int(os.getenv("QDRANT_PORT", "6333")),
+                api_key=api_key or os.getenv("QDRANT_API_KEY"),
+                timeout=30  # Increased timeout for batch operations
+            )
+            
+        # Initialize batch processor
+        self.batch_processor = BatchProcessor(self.batch_config)
+        
+        # Ensure collection exists with correct schema
+        self._ensure_collection()
+        
+    def _ensure_collection(self):
+        """Ensure collection exists with correct schema."""
         try:
-            collection_info = self.client.get_collection(self.collection_name)
-            if collection_info is None:
+            collections = self.client.get_collections()
+            collection_names = [c.name for c in collections.collections]
+            
+            if self.collection_name not in collection_names:
                 self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=models.VectorParams(
@@ -40,442 +85,275 @@ class QdrantIndexer:
                         distance=models.Distance.COSINE
                     )
                 )
-        except UnexpectedResponse:
-            self.client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=models.VectorParams(
-                    size=self.vector_size,
-                    distance=models.Distance.COSINE
-                )
-            )
-
-    def index_metadata(
-        self,
-        metadata: Dict,
-        embedding_provider: EmbeddingProvider,
-        batch_size: Optional[int] = None,
-    ) -> None:
-        """Index metadata into Qdrant with embeddings."""
-        if not metadata:
-            return
-        
-        # Create a function to process points
-        def process_points(points):
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=points
-            )
-        
-        # Process transformations
-        if "transformations" in metadata:
-            for transformation_id, transformation in metadata["transformations"].items():
-                logging.info(f"Processing transformation {transformation_id}")
+                logging.info(f"Created collection {self.collection_name}")
                 
-                # Prepare texts for embedding
-                texts = []
-                
-                # Add transformation metadata
-                texts.append(self._prepare_transformation_text(transformation))
-                
-                # Add texts for each block
-                if "blocks" in transformation:
-                    for block in transformation["blocks"]:
-                        block_text = self._prepare_block_text(block)
-                        if block_text:
-                            texts.append(block_text)
-                
-                # Get embeddings for all texts
-                embeddings = embedding_provider.embed(texts)
-                
-                # Prepare points for indexing
-                points = []
-                for i, (text, embedding) in enumerate(zip(texts, embeddings)):
-                    point_id = self._generate_point_id(transformation_id, i)
-                    points.append({
-                        "id": point_id,
-                        "vector": embedding,
-                        "payload": {
-                            "text": text,
-                            "metadata_type": "transformation",
-                            "raw_metadata": transformation if i == 0 else transformation["blocks"][i-1],
-                            "transformation_id": transformation_id
-                        }
-                    })
-                
-                # Index points in batches
-                self.batch_processor.process_batches(points, process_fn=process_points)
-        
-        # Process other metadata types
-        for metadata_type, items in metadata.items():
-            if metadata_type != "transformations":  # Skip transformations as they're already processed
-                logging.info(f"Processing metadata type: {metadata_type}")
-                
-                if metadata_type == "buckets":
-                    # Handle buckets (list)
-                    logging.info(f"Found {len(items)} items of type {metadata_type}")
-                    self._process_items(
-                        items,
-                        metadata_type,
-                        embedding_provider,
-                        batch_size=batch_size,
-                    )
-                
-                elif metadata_type == "tables":
-                    # Handle tables dictionary (bucket_id -> list of tables)
-                    for bucket_id, tables in items.items():
-                        logging.info(
-                            f"Processing {len(tables)} tables for bucket {bucket_id}"
-                        )
-                        self._process_items(
-                            tables,
-                            metadata_type,
-                            embedding_provider,
-                            batch_size=batch_size,
-                        )
-                
-                elif metadata_type == "table_details":
-                    # Handle table details and their columns
-                    for table_id, details in items.items():
-                        if "columns" in details:
-                            logging.info(
-                                f"Processing {len(details['columns'])} columns for table {table_id}"
-                            )
-                            # Create new column objects with table_id
-                            enriched_columns = []
-                            for column in details["columns"]:
-                                if isinstance(column, str):
-                                    # Convert string to dictionary if needed
-                                    enriched_column = {"name": column}
-                                else:
-                                    # Make a copy to avoid modifying the original
-                                    enriched_column = dict(column)
-                                
-                                enriched_column["table_id"] = table_id
-                                if "bucket_id" in details:
-                                    enriched_column["bucket_id"] = details["bucket_id"]
-                                enriched_columns.append(enriched_column)
-                            
-                            self._process_items(
-                                enriched_columns,
-                                "columns",
-                                embedding_provider,
-                                batch_size=batch_size,
-                            )
-                
-                elif metadata_type == "configurations":
-                    # Handle configurations as a list
-                    logging.info(f"Found {len(items)} items of type {metadata_type}")
-                    self._process_items(
-                        items,
-                        metadata_type,
-                        embedding_provider,
-                        batch_size=batch_size,
-                    )
-
-    def _process_items(
-        self,
-        items: List[Dict],
-        metadata_type: str,
-        embedding_provider: EmbeddingProvider,
-        batch_size: Optional[int] = None,
-    ) -> None:
-        """Process a batch of items for indexing."""
-        def process_batch(batch: List[Dict]) -> None:
-            texts = [self._prepare_text_for_embedding(item, metadata_type) for item in batch]
-            embeddings = embedding_provider.embed(texts)
+        except Exception as e:
+            logging.error(f"Error ensuring collection exists: {e}")
+            raise
             
-            points = []
-            for item, embedding in zip(batch, embeddings):
-                point_id = self._generate_point_id(metadata_type, item)
-                payload = {
-                    "metadata_type": metadata_type,
-                    "raw_metadata": item,
-                    "text": self._prepare_text_for_embedding(item, metadata_type)
-                }
-                
-                # Add table_id for columns
-                if metadata_type == "columns" and "table_id" in item:
-                    payload["table_id"] = item["table_id"]
-                
-                points.append(
-                    models.PointStruct(
-                        id=point_id,
-                        vector=embedding,
-                        payload=payload
-                    )
-                )
-            
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type(UnexpectedResponse)
+    )
+    def _upsert_batch(self, points: List[PointStruct]):
+        """Upsert a batch of points with retry logic.
+        
+        Args:
+            points: List of points to upsert
+        """
+        try:
             self.client.upsert(
                 collection_name=self.collection_name,
                 points=points,
-                wait=True
+                wait=True  # Ensure consistency
             )
-        
-        if batch_size:
-            self.batch_processor.batch_config.batch_size = batch_size
-        self.batch_processor.process_batches(items, process_batch)
-
-    def _prepare_text_for_embedding(self, item, metadata_type):
-        """Prepare text for embedding based on metadata type."""
-        if metadata_type == "columns":
-            return self._prepare_column_text(item)
-        elif metadata_type == "transformations":
-            return self._prepare_transformation_text(item)
-        elif metadata_type == "blocks":
-            return self._prepare_block_text(item)
-        elif metadata_type == "tables":
-            return self._prepare_table_text(item)
-        else:
-            return self._prepare_default_text(item)
-
-    def _prepare_default_text(self, item):
-        """Prepare default text format for items."""
-        parts = []
-        if "name" in item:
-            parts.append(f"Name: {item['name']}")
-        if "description" in item:
-            parts.append(f"Description: {item['description']}")
-        if "type" in item:
-            parts.append(f"Type: {item['type']}")
-        if "tags" in item and item["tags"]:
-            parts.append(f"Tags: {', '.join(item['tags'])}")
-        return " | ".join(parts) if parts else "{}"
-
-    def _prepare_table_text(self, table):
-        """Prepare table metadata text."""
-        parts = []
-        if "name" in table:
-            parts.append(f"Name: {table['name']}")
-        if "description" in table:
-            parts.append(f"Description: {table['description']}")
-        if "isLinked" in table and table["isLinked"]:
-            parts.append("Type: Linked Table")
-            if "sourceTable" in table:
-                source = table["sourceTable"]
-                parts.append(f"Source Table: {source.get('id', 'unknown')}")
-                if "project" in source:
-                    parts.append(f"Source Project: {source['project'].get('id', 'unknown')}")
-            if "sourceTableDetails" in table:
-                source_details = table["sourceTableDetails"]
-                if source_details.get("isAccessible", True):
-                    if "description" in source_details:
-                        parts.append(f"Source Description: {source_details['description']}")
-                else:
-                    parts.append("Source Table Status: Inaccessible")
-                    if "displayName" in source_details:
-                        parts.append(f"Source Display Name: {source_details['displayName']}")
-        if "rowsCount" in table:
-            parts.append(f"Rows: {table['rowsCount']}")
-        if "dataSizeBytes" in table:
-            parts.append(f"Size: {table['dataSizeBytes']} bytes")
-        if "bucket" in table:
-            parts.append(f"Bucket: {table['bucket'].get('id', 'unknown')}")
-        if "primaryKey" in table and table["primaryKey"]:
-            parts.append(f"Primary Key: {', '.join(table['primaryKey'])}")
-        if "created" in table:
-            parts.append(f"Created: {table['created']}")
-        if "lastImportDate" in table:
-            parts.append(f"Last Import: {table['lastImportDate']}")
-        if "lastChangeDate" in table:
-            parts.append(f"Last Change: {table['lastChangeDate']}")
-        return " | ".join(parts) if parts else "{}"
-
-    def _prepare_column_text(self, column):
-        """Prepare column metadata text."""
-        if not column:
-            return "{}"
-        
-        parts = []
-        if "name" in column:
-            parts.append(f"Name: {column['name']}")
-        if "type" in column:
-            parts.append(f"Type: {column['type']}")
-        if "description" in column:
-            parts.append(f"Description: {column['description']}")
-        
-        if "statistics" in column:
-            stats = column["statistics"]
-            stat_parts = []
-            if "min" in stats:
-                stat_parts.append(f"min={stats['min']}")
-            if "max" in stats:
-                stat_parts.append(f"max={stats['max']}")
-            if "avg" in stats:
-                stat_parts.append(f"avg={stats['avg']}")
-            if "unique_count" in stats:
-                stat_parts.append(f"unique={stats['unique_count']}")
-            if "most_common" in stats:
-                stat_parts.append(f"most_common={','.join(stats['most_common'])}")
-            if stat_parts:
-                parts.append(f"Statistics: {', '.join(stat_parts)}")
-        
-        if "quality_metrics" in column:
-            quality = column["quality_metrics"]
-            quality_parts = []
-            if "completeness" in quality:
-                quality_parts.append(f"{int(quality['completeness'] * 100)}% complete")
-            if "validity" in quality:
-                quality_parts.append(f"{int(quality['validity'] * 100)}% valid")
-            if "range_check" in quality:
-                quality_parts.append(f"Valid range: {quality['range_check']['min_valid']}-{quality['range_check']['max_valid']}")
-            if "standardization" in quality:
-                quality_parts.append(f"Standard: {quality['standardization']['standard']}")
-            if "common_issues" in quality:
-                quality_parts.append(f"Issues: {', '.join(quality['common_issues'])}")
-            if quality_parts:
-                parts.append(f"Quality: {', '.join(quality_parts)}")
-        
-        return " | ".join(parts)
-
-    def _prepare_transformation_text(self, transformation: Dict) -> str:
-        """Prepare a text representation of a transformation."""
-        name = transformation.get("name", "Unnamed")
-        transformation_type = transformation.get("type", "unknown")
-        description = transformation.get("description", "")
-        
-        # Extract dependencies
-        dependencies = []
-        
-        # Check direct dependencies first
-        if "dependencies" in transformation:
-            if "requires" in transformation["dependencies"]:
-                dependencies.append(f"Requires {', '.join(transformation['dependencies']['requires'])}")
-            if "produces" in transformation["dependencies"]:
-                dependencies.append(f"Produces {', '.join(transformation['dependencies']['produces'])}")
-        
-        # If no direct dependencies, try to extract from blocks
-        if not dependencies:
-            inputs = set()
-            outputs = set()
-            for block in transformation.get("blocks", []):
-                if "inputs" in block:
-                    for input_item in block["inputs"]:
-                        if isinstance(input_item, dict):
-                            inputs.add(input_item.get("source", ""))
-                        else:
-                            inputs.add(input_item)
-                if "outputs" in block:
-                    for output_item in block["outputs"]:
-                        if isinstance(output_item, dict):
-                            outputs.add(output_item.get("destination", ""))
-                        else:
-                            outputs.add(output_item)
+        except Exception as e:
+            logging.error(f"Error upserting batch: {e}")
+            raise
             
-            inputs = {i for i in inputs if i}  # Remove empty strings
-            outputs = {o for o in outputs if o}  # Remove empty strings
+    def index_metadata(self, metadata: Dict, embedding_provider: EmbeddingProvider):
+        """Index metadata with vector embeddings.
+        
+        Args:
+            metadata: Metadata dictionary to index
+            embedding_provider: Provider for generating embeddings
+        """
+        try:
+            # Process all items in parallel batches
+            points = []
             
-            if inputs:
-                dependencies.append(f"Requires {', '.join(sorted(inputs))}")
-            if outputs:
-                dependencies.append(f"Produces {', '.join(sorted(outputs))}")
+            # Process buckets
+            logging.info("Processing buckets...")
+            for bucket in metadata["buckets"]:
+                point = self._create_point(
+                    text=f"Bucket: {bucket.get('name', 'unknown')}",
+                    metadata_type="bucket",
+                    metadata=bucket,
+                    embedding_provider=embedding_provider
+                )
+                points.append(point)
+                
+            # Process tables and their details
+            logging.info("Processing tables and columns...")
+            for bucket_id, tables in metadata["tables"].items():
+                for table in tables:
+                    table_id = table.get("id")
+                    if table_id in metadata["table_details"]:
+                        table_detail = metadata["table_details"][table_id]
+                        
+                        # Create table point with enriched metadata
+                        point = self._create_point(
+                            text=self._prepare_table_text(table, table_detail),
+                            metadata_type="table",
+                            metadata={**table, "details": table_detail},
+                            embedding_provider=embedding_provider
+                        )
+                        points.append(point)
+                        
+                        # Process columns with enriched metadata
+                        if table_id in metadata.get("columns", {}).get(bucket_id, {}):
+                            for column in metadata["columns"][bucket_id][table_id]:
+                                point = self._create_point(
+                                    text=self._prepare_column_text(column, table_id, table_detail),
+                                    metadata_type="column",
+                                    metadata={**column, "table_id": table_id},
+                                    embedding_provider=embedding_provider
+                                )
+                                points.append(point)
+                                
+            # Process configurations with enriched metadata
+            logging.info("Processing configurations...")
+            for component_id, configs in metadata["configurations"].items():
+                for config in configs:
+                    config_id = config.get("id")
+                    point = self._create_point(
+                        text=self._prepare_config_text(config, component_id),
+                        metadata_type="configuration",
+                        metadata={**config, "component_id": component_id},
+                        embedding_provider=embedding_provider
+                    )
+                    points.append(point)
+                    
+                    # Process config rows
+                    if config_id in metadata.get("config_rows", {}):
+                        for row in metadata["config_rows"][config_id]:
+                            point = self._create_point(
+                                text=self._prepare_config_row_text(row, config_id, config),
+                                metadata_type="config_row",
+                                metadata={**row, "config_id": config_id},
+                                embedding_provider=embedding_provider
+                            )
+                            points.append(point)
+            
+            # Process relationships
+            logging.info("Processing relationships...")
+            if "relationships" in metadata:
+                for rel_type, relationships in metadata["relationships"].items():
+                    for rel in relationships:
+                        point = self._create_point(
+                            text=self._prepare_relationship_text(rel, rel_type),
+                            metadata_type=f"relationship_{rel_type}",
+                            metadata={**rel, "relationship_type": rel_type},
+                            embedding_provider=embedding_provider
+                        )
+                        points.append(point)
+            
+            # Process points in optimized batches
+            logging.info(f"Processing {len(points)} points in batches...")
+            self.batch_processor.process_batches(
+                points,
+                self._upsert_batch,
+                batch_size=self.batch_config.batch_size
+            )
+            logging.info("Metadata indexing completed successfully")
+            
+        except Exception as e:
+            logging.error(f"Error indexing metadata: {e}")
+            raise
+            
+    def _create_point(
+        self,
+        text: str,
+        metadata_type: str,
+        metadata: Dict,
+        embedding_provider: EmbeddingProvider
+    ) -> PointStruct:
+        """Create a point for indexing.
         
-        dependencies_text = "; ".join(dependencies)
-        
-        # Extract runtime info
-        runtime_parts = []
-        if "runtime" in transformation:
-            if "type" in transformation["runtime"]:
-                runtime_parts.append(transformation["runtime"]["type"])
-            if "memory" in transformation["runtime"]:
-                runtime_parts.append(f"{transformation['runtime']['memory']} memory")
-        else:
-            # Fallback to top-level memory and default docker type
-            if "memory" in transformation:
-                runtime_parts.append(f"{transformation['memory']} memory")
-            runtime_parts.insert(0, "docker")
-        
-        runtime_text = ", ".join(runtime_parts)
-        
-        return f"Name: {name} | Type: {transformation_type} | Description: {description} | Dependencies: {dependencies_text} | Runtime: {runtime_text}"
+        Args:
+            text: Text to embed
+            metadata_type: Type of metadata
+            metadata: Metadata dictionary
+            embedding_provider: Provider for generating embeddings
+            
+        Returns:
+            Point structure for indexing
+        """
+        try:
+            # Enrich text with metadata context
+            enriched_text = self._enrich_text_for_embedding(text, metadata_type, metadata)
+            
+            # Generate embedding
+            embedding = embedding_provider.embed([enriched_text])[0]
+            
+            # Validate embedding dimensions
+            if len(embedding) != self.vector_size:
+                raise ValueError(
+                    f"Embedding dimension mismatch: got {len(embedding)}, "
+                    f"expected {self.vector_size}"
+                )
+                
+            # Create point
+            return PointStruct(
+                id=str(uuid.uuid4()),
+                vector=embedding,
+                payload={
+                    "text": enriched_text,
+                    "metadata_type": metadata_type,
+                    "raw_metadata": metadata,  # Store original metadata
+                    "tenant_id": self.tenant_id,
+                    "indexed_at": datetime.datetime.utcnow().isoformat()
+                }
+            )
+            
+        except Exception as e:
+            logging.error(f"Error creating point: {e}")
+            raise
 
-    def _prepare_block_text(self, block: Dict) -> str:
-        """Prepare a text representation of a transformation block."""
-        parts = []
+    def _enrich_text_for_embedding(self, text: str, metadata_type: str, metadata: Dict) -> str:
+        """Enrich text with metadata context for better embeddings.
         
-        # Block name
-        name = block.get("name", "Unnamed Block")
-        parts.append(f"Block: {name}")
+        Args:
+            text: Base text to enrich
+            metadata_type: Type of metadata
+            metadata: Metadata dictionary
+            
+        Returns:
+            Enriched text for embedding
+        """
+        parts = [text]
         
-        # Inputs
-        if "inputs" in block:
-            input_details = []
-            for input_item in block["inputs"]:
-                if isinstance(input_item, dict):
-                    if "file" in input_item and "source" in input_item:
-                        input_details.append(f"{input_item['file']} from {input_item['source']}")
-                else:
-                    table_name = input_item.split(".")[-1]
-                    input_details.append(f"{table_name} from {input_item}")
-            if input_details:
-                parts.append(f"Inputs: {', '.join(input_details)}")
+        # Add type-specific context
+        if metadata_type == "bucket":
+            parts.extend([
+                f"Description: {metadata.get('description', 'No description')}",
+                f"Stage: {metadata.get('stage', 'unknown')}",
+                f"Backend: {metadata.get('backend', 'unknown')}"
+            ])
+            
+        elif metadata_type == "table":
+            details = metadata.get("details", {})
+            parts.extend([
+                f"Description: {metadata.get('description', 'No description')}",
+                f"Primary Key: {', '.join(details.get('primaryKey', []))}",
+                f"Row Count: {details.get('statistics', {}).get('row_count', 0)}",
+                f"Last Changed: {details.get('statistics', {}).get('last_change_date', 'unknown')}",
+                "Columns: " + ", ".join(col.get("name", "") for col in details.get("columns", []))
+            ])
+            
+        elif metadata_type == "column":
+            stats = metadata.get("statistics", {})
+            parts.extend([
+                f"Description: {metadata.get('description', 'No description')}",
+                f"Data Type: {metadata.get('type', 'unknown')}",
+                f"Format: {metadata.get('format', 'unknown')}",
+                f"Null Count: {stats.get('null_count', 0)}",
+                f"Unique Count: {stats.get('unique_count', 0)}",
+                f"Constraints: {', '.join(stats.get('constraints', []))}"
+            ])
+            
+        elif metadata_type == "configuration":
+            parts.extend([
+                f"Description: {metadata.get('description', 'No description')}",
+                f"Component: {metadata.get('component_id', 'unknown')}",
+                f"Version: {metadata.get('version', 'unknown')}",
+                f"Created By: {metadata.get('createdBy', {}).get('name', 'unknown')}",
+                f"State: {metadata.get('state', 'unknown')}"
+            ])
+            
+        elif metadata_type == "config_row":
+            parts.extend([
+                f"Description: {metadata.get('description', 'No description')}",
+                f"Configuration ID: {metadata.get('config_id', 'unknown')}",
+                f"Name: {metadata.get('name', 'unknown')}",
+                f"State: {metadata.get('state', 'unknown')}"
+            ])
+            
+        # Add any tags
+        if "tags" in metadata:
+            parts.append(f"Tags: {', '.join(metadata['tags'])}")
+            
+        # Add creation and modification info
+        parts.extend([
+            f"Created: {metadata.get('created', 'unknown')}",
+            f"Last Modified: {metadata.get('lastModified', 'unknown')}"
+        ])
         
-        # Outputs
-        if "outputs" in block:
-            output_details = []
-            for output_item in block["outputs"]:
-                if isinstance(output_item, dict):
-                    if "file" in output_item and "destination" in output_item:
-                        output_details.append(f"{output_item['file']} to {output_item['destination']}")
-                else:
-                    table_name = output_item.split(".")[-1]
-                    output_details.append(f"{table_name} to {output_item}")
-            if output_details:
-                parts.append(f"Outputs: {', '.join(output_details)}")
-        
-        # Code and operations
-        code = block.get("code", "")
-        operations = []
-        
-        # Extract description from first comment if available
-        description = ""
-        if code:
-            lines = code.split("\n")
-            for line in lines:
-                if line.strip().startswith("#"):
-                    description = line.strip("# ").strip()
-                    break
-        if description:
-            operations.append(description)
-        
-        # Look for common operations
-        operation_keywords = {
-            "read_csv": "read_csv",
-            "merge": "merge",
-            "groupby": "groupby",
-            "agg": "aggregate",
-            "aggregate": "aggregate",
-            "to_csv": "to_csv"
-        }
-        
-        for keyword, operation in operation_keywords.items():
-            if keyword in code.lower():
-                operations.append(operation)
-        
-        # Add operations to parts
-        if operations:
-            parts.append(f"Code: {', '.join(operations)}")
-        
-        return " | ".join(parts)
+        return "\n".join(part for part in parts if part and "unknown" not in part)
 
-    def _generate_point_id(self, metadata_type: str, item: Union[Dict, int]) -> str:
-        """Generate a unique ID for a point."""
-        # Create a deterministic UUID based on metadata type and item ID/name
-        namespace_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, 'keboola.metadata')
-        
-        # If item is a dictionary, use its ID or name
-        if isinstance(item, dict):
-            if "id" in item:
-                item_id = str(item["id"])
-            elif "name" in item:
-                item_id = str(item["name"])
-            else:
-                item_id = str(uuid.uuid4())
-        else:
-            # If item is not a dictionary (e.g., an integer index), use its string representation
-            item_id = str(item)
-        
-        # Generate a new UUID using the namespace UUID and the combined metadata type and item ID
-        return str(uuid.uuid5(namespace_uuid, f"{metadata_type}_{item_id}"))
+    def delete_tenant_collection(self) -> None:
+        """Delete the entire collection for this tenant."""
+        try:
+            self.client.delete_collection(self.collection_name)
+        except UnexpectedResponse as e:
+            if "not found" not in str(e).lower():
+                raise
+
+    @classmethod
+    def list_tenant_collections(cls, client: QdrantClient) -> List[Dict[str, Any]]:
+        """List all tenant collections and their metadata."""
+        collections = client.get_collections()
+        tenant_collections = []
+        for collection in collections.collections:
+            if collection.metadata and "tenant_id" in collection.metadata:
+                tenant_collections.append({
+                    "tenant_id": collection.metadata["tenant_id"],
+                    "collection_name": collection.name,
+                    "created_at": collection.metadata.get("created_at"),
+                    "vectors_count": collection.vectors_count,
+                })
+        return tenant_collections
 
     def search_metadata(
         self,
@@ -792,3 +670,104 @@ class QdrantIndexer:
             )
         
         self.batch_processor.process_batches(items, process_batch)
+
+    def _prepare_table_text(self, table: Dict, table_detail: Dict) -> str:
+        """Prepare rich text representation of a table."""
+        parts = [f"Table: {table.get('name', 'unknown')}"]
+        
+        if "description" in table:
+            parts.append(f"Description: {table['description']}")
+            
+        if "statistics" in table_detail:
+            stats = table_detail["statistics"]
+            parts.extend([
+                f"Rows: {stats.get('row_count', 0)}",
+                f"Size: {stats.get('size_bytes', 0)} bytes",
+                f"Freshness Score: {stats.get('freshness_score', 0)}/100"
+            ])
+            
+        if "columns" in table_detail:
+            parts.append("Columns: " + ", ".join(
+                col.get("name", "") for col in table_detail["columns"]
+            ))
+            
+        if "dependencies" in table_detail:
+            deps = table_detail["dependencies"]
+            if deps.get("source_tables"):
+                parts.append("Sources: " + ", ".join(deps["source_tables"]))
+            if deps.get("target_tables"):
+                parts.append("Targets: " + ", ".join(deps["target_tables"]))
+                
+        return "\n".join(parts)
+        
+    def _prepare_column_text(self, column: Dict, table_id: str, table_detail: Dict) -> str:
+        """Prepare rich text representation of a column."""
+        parts = [f"Column: {column.get('name', 'unknown')}"]
+        
+        if "description" in column:
+            parts.append(f"Description: {column['description']}")
+            
+        if "statistics" in column:
+            stats = column["statistics"]
+            parts.extend([
+                f"Type: {stats.get('data_type', 'unknown')}",
+                f"Format: {stats.get('format', 'unknown')}",
+                f"Quality Score: {stats.get('quality_score', 0)}/100",
+                f"Null Rate: {stats.get('null_count', 0)}/{table_detail.get('statistics', {}).get('row_count', 0)}",
+                f"Unique Values: {stats.get('unique_count', 0)}"
+            ])
+            
+            if stats.get("sample_values"):
+                parts.append("Samples: " + ", ".join(map(str, stats["sample_values"][:5])))
+                
+        return "\n".join(parts)
+        
+    def _prepare_config_text(self, config: Dict, component_id: str) -> str:
+        """Prepare rich text representation of a configuration."""
+        parts = [f"Configuration: {config.get('name', 'unknown')}"]
+        
+        if "description" in config:
+            parts.append(f"Description: {config['description']}")
+            
+        parts.extend([
+            f"Component: {component_id}",
+            f"Version: {config.get('version', 'unknown')}",
+            f"State: {config.get('state', 'unknown')}"
+        ])
+        
+        if "createdBy" in config:
+            parts.append(f"Created By: {config['createdBy'].get('name', 'unknown')}")
+            
+        return "\n".join(parts)
+        
+    def _prepare_config_row_text(self, row: Dict, config_id: str, config: Dict) -> str:
+        """Prepare rich text representation of a configuration row."""
+        parts = [
+            f"Config Row: {row.get('name', 'unknown')}",
+            f"Configuration: {config.get('name', 'unknown')} ({config_id})"
+        ]
+        
+        if "description" in row:
+            parts.append(f"Description: {row['description']}")
+            
+        parts.append(f"State: {row.get('state', 'unknown')}")
+        
+        return "\n".join(parts)
+        
+    def _prepare_relationship_text(self, rel: Dict, rel_type: str) -> str:
+        """Prepare rich text representation of a relationship."""
+        if rel_type == "column_to_column":
+            return (
+                f"Column Relationship: {rel['source_table']}.{rel['source_column']} → "
+                f"{rel['target_table']}.{rel['target_column']}\n"
+                f"Type: {rel['relationship_type']}\n"
+                f"Confidence: {rel['confidence']:.2%}"
+            )
+        elif rel_type == "table_to_table":
+            return (
+                f"Table Relationship: {rel['source_table']} → {rel['target_table']}\n"
+                f"Type: {rel['relationship_type']}\n"
+                f"Confidence: {rel['confidence']:.2%}"
+            )
+        else:
+            return f"Relationship ({rel_type}): {json.dumps(rel)}"

@@ -1,23 +1,50 @@
+"""Embedding providers for vector generation."""
+import os
+from typing import List, Union
 import logging
-from typing import Optional, Dict
-from app.vectorizer import OpenAIProvider, SentenceTransformerProvider, EmbeddingProvider
 
-logger = logging.getLogger(__name__)
+from openai import OpenAI
 
-def get_embedding_provider(config: Dict) -> EmbeddingProvider:
-    """
-    Factory function to create an embedding provider based on configuration.
-    """
-    openai_api_key = config.get("OPENAI_API_KEY")
-    if openai_api_key:
-        logger.info("Using OpenAI embedding provider")
-        return OpenAIProvider(
-            api_key=openai_api_key,
-            model=config.get("OPENAI_MODEL", "text-embedding-ada-002")
-        )
-    else:
-        logger.info("Using SentenceTransformer embedding provider")
-        return SentenceTransformerProvider(
-            model_name=config.get("SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"),
-            device="cpu"
-        ) 
+class EmbeddingProvider:
+    """Base class for embedding providers."""
+    
+    def embed(self, texts: List[str]) -> List[List[float]]:
+        """Convert texts to vector embeddings."""
+        raise NotImplementedError
+
+class OpenAIEmbeddingProvider(EmbeddingProvider):
+    """OpenAI embedding provider using text-embedding-ada-002."""
+    
+    def __init__(self, model: str = "text-embedding-ada-002"):
+        """Initialize OpenAI embedding provider.
+        
+        Args:
+            model: OpenAI embedding model to use
+        """
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.model = model
+        
+    def embed(self, texts: List[str]) -> List[List[float]]:
+        """Convert texts to vector embeddings using OpenAI.
+        
+        Args:
+            texts: List of texts to convert to embeddings
+            
+        Returns:
+            List of embedding vectors
+        """
+        try:
+            # Get embeddings from OpenAI
+            response = self.client.embeddings.create(
+                model=self.model,
+                input=texts
+            )
+            
+            # Extract embedding vectors
+            embeddings = [data.embedding for data in response.data]
+            
+            return embeddings
+            
+        except Exception as e:
+            logging.error(f"Error getting embeddings from OpenAI: {str(e)}")
+            raise

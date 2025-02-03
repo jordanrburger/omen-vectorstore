@@ -12,10 +12,14 @@ from app.batch_processor import BatchConfig
 
 
 class TestQdrantIndexer(unittest.TestCase):
+    def setUp(self):
+        self.tenant_id = "test_tenant"
+        self.collection_name = f"{self.tenant_id}_metadata"
+
     def test_ensure_collection_skips_existing(self):
         mock_qdrant_client = MagicMock()
         mock_collection = MagicMock()
-        mock_collection.name = "keboola_metadata"
+        mock_collection.name = self.collection_name
         mock_qdrant_client.get_collections.return_value = MagicMock(
             collections=[mock_collection]
         )
@@ -24,7 +28,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            QdrantIndexer()
+            QdrantIndexer(tenant_id=self.tenant_id)
             mock_qdrant_client.create_collection.assert_not_called()
 
     def test_ensure_collection_creates_new(self):
@@ -35,25 +39,53 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            QdrantIndexer()
+            QdrantIndexer(tenant_id=self.tenant_id)
             mock_qdrant_client.create_collection.assert_called_once()
+            # Verify tenant metadata was included
+            call_args = mock_qdrant_client.create_collection.call_args[1]
+            self.assertEqual(call_args["collection_name"], self.collection_name)
+            self.assertEqual(call_args["metadata"]["tenant_id"], self.tenant_id)
+            self.assertIn("created_at", call_args["metadata"])
 
-    def test_ensure_collection_handles_storage_error(self):
+    def test_delete_tenant_collection(self):
         mock_qdrant_client = MagicMock()
-        mock_qdrant_client.get_collection.side_effect = UnexpectedResponse(
-            status_code=500,
-            reason_phrase="Internal Server Error",
-            content=b"No space left on device",
-            headers={"Content-Type": "text/plain"},
-        )
-
+        
         with patch(
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
-            # The collection creation should still be attempted after the get_collection fails
-            mock_qdrant_client.create_collection.assert_called_once()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
+            indexer.delete_tenant_collection()
+            mock_qdrant_client.delete_collection.assert_called_once_with(self.collection_name)
+
+    def test_list_tenant_collections(self):
+        mock_qdrant_client = MagicMock()
+        mock_collections = MagicMock()
+        mock_collection1 = MagicMock()
+        mock_collection1.name = "tenant1_metadata"
+        mock_collection1.metadata = {
+            "tenant_id": "tenant1",
+            "created_at": "2024-02-03T10:00:00"
+        }
+        mock_collection1.vectors_count = 100
+
+        mock_collection2 = MagicMock()
+        mock_collection2.name = "tenant2_metadata"
+        mock_collection2.metadata = {
+            "tenant_id": "tenant2",
+            "created_at": "2024-02-03T11:00:00"
+        }
+        mock_collection2.vectors_count = 200
+
+        mock_collections.collections = [mock_collection1, mock_collection2]
+        mock_qdrant_client.get_collections.return_value = mock_collections
+
+        collections = QdrantIndexer.list_tenant_collections(mock_qdrant_client)
+        self.assertEqual(len(collections), 2)
+        self.assertEqual(collections[0]["tenant_id"], "tenant1")
+        self.assertEqual(collections[1]["tenant_id"], "tenant2")
+        self.assertEqual(collections[0]["vectors_count"], 100)
+        self.assertEqual(collections[1]["vectors_count"], 200)
 
     def test_index_metadata_processes_list(self):
         mock_qdrant_client = MagicMock()
@@ -64,7 +96,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             metadata = {
                 "buckets": [
                     {"id": "bucket1"},
@@ -75,6 +107,9 @@ class TestQdrantIndexer(unittest.TestCase):
 
             assert mock_embedding_provider.embed.called
             assert mock_qdrant_client.upsert.called
+            # Verify correct collection name is used
+            call_args = mock_qdrant_client.upsert.call_args[1]
+            self.assertEqual(call_args["collection_name"], self.collection_name)
 
     def test_index_metadata_processes_dict(self):
         mock_qdrant_client = MagicMock()
@@ -85,7 +120,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             metadata = {
                 "tables": {
                     "bucket1": [
@@ -106,7 +141,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
     
             # Test table metadata
             table_item = {
@@ -144,7 +179,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             item = {"id": "test_id"}
             point_id = indexer._generate_point_id("test_type", item)
     
@@ -178,7 +213,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             results = indexer.search_metadata(
                 "test query",
                 mock_embedding_provider,
@@ -196,7 +231,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             
             # Test transformation metadata
             transformation = {
@@ -228,7 +263,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             
             # Test block with inputs, outputs and code
             block = {
@@ -264,7 +299,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             
             # Test column with quality metrics
             column = {
@@ -302,7 +337,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             metadata = {
                 "buckets": [
                     {"id": "bucket1", "name": "First Bucket"},
@@ -345,7 +380,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             results = indexer.search_metadata(
                 "find email columns",
                 mock_embedding_provider,
@@ -356,7 +391,7 @@ class TestQdrantIndexer(unittest.TestCase):
             # Verify search was called with correct parameters
             mock_qdrant_client.search.assert_called_once()
             search_args = mock_qdrant_client.search.call_args[1]
-            self.assertEqual(search_args["collection_name"], "keboola_metadata")
+            self.assertEqual(search_args["collection_name"], self.collection_name)
             self.assertEqual(search_args["limit"], 5)
             self.assertEqual(
                 search_args["query_filter"],
@@ -380,7 +415,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             metadata = {
                 "buckets": [{"id": "bucket1"}],
                 "invalid_type": [{"id": "test"}]  # Invalid metadata type
@@ -405,7 +440,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
 
             # Test with empty metadata
             empty_metadata = {}
@@ -425,7 +460,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             
             # Test block with complex code
             block = {
@@ -471,7 +506,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             
             # Test transformation with phases
             transformation = {
@@ -515,7 +550,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             metadata = {
                 "buckets": [
                     {"id": "bucket1", "name": "Test Bucket"}
@@ -560,7 +595,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             metadata = {
                 "buckets": [{"id": f"bucket{i}", "name": f"Test Bucket {i}"} for i in range(100)]
             }
@@ -590,7 +625,7 @@ class TestQdrantIndexer(unittest.TestCase):
             mock_progress = MagicMock()
             mock_tqdm.return_value.__enter__.return_value = mock_progress
             
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             metadata = {
                 "buckets": [{"id": f"bucket{i}"} for i in range(5)]
             }
@@ -610,7 +645,7 @@ class TestQdrantIndexer(unittest.TestCase):
             "app.indexer.QdrantClient",
             return_value=mock_qdrant_client,
         ):
-            indexer = QdrantIndexer()
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
             
             # Test column text preparation
             column = {
@@ -641,3 +676,97 @@ class TestQdrantIndexer(unittest.TestCase):
             assert "Type: python" in transform_text
             assert "Description: Test transformation" in transform_text
             assert "Dependencies: Requires in.c-main.source; Produces out.c-main.target" in transform_text
+
+    def test_custom_collection_name(self):
+        mock_qdrant_client = MagicMock()
+        custom_collection = "custom_collection"
+        
+        with patch(
+            "app.indexer.QdrantClient",
+            return_value=mock_qdrant_client,
+        ):
+            indexer = QdrantIndexer(tenant_id=self.tenant_id, collection_name=custom_collection)
+            self.assertEqual(indexer.collection_name, custom_collection)
+
+    def test_tenant_isolation(self):
+        mock_qdrant_client = MagicMock()
+        mock_embedding_provider = MagicMock()
+        mock_embedding_provider.embed.return_value = [[0.1, 0.2]]
+
+        with patch(
+            "app.indexer.QdrantClient",
+            return_value=mock_qdrant_client,
+        ):
+            # Create two tenants
+            tenant1_indexer = QdrantIndexer(tenant_id="tenant1")
+            tenant2_indexer = QdrantIndexer(tenant_id="tenant2")
+
+            # Index data for each tenant
+            tenant1_data = {"buckets": [{"id": "tenant1_bucket"}]}
+            tenant2_data = {"buckets": [{"id": "tenant2_bucket"}]}
+
+            tenant1_indexer.index_metadata(tenant1_data, mock_embedding_provider)
+            tenant2_indexer.index_metadata(tenant2_data, mock_embedding_provider)
+
+            # Verify each tenant's data was indexed to their respective collections
+            tenant1_calls = [
+                call for call in mock_qdrant_client.upsert.call_args_list 
+                if call[1]["collection_name"] == "tenant1_metadata"
+            ]
+            tenant2_calls = [
+                call for call in mock_qdrant_client.upsert.call_args_list 
+                if call[1]["collection_name"] == "tenant2_metadata"
+            ]
+
+            self.assertEqual(len(tenant1_calls), 1)
+            self.assertEqual(len(tenant2_calls), 1)
+
+    def test_tenant_collection_deletion(self):
+        mock_qdrant_client = MagicMock()
+        mock_qdrant_client.delete_collection.return_value = True
+
+        with patch(
+            "app.indexer.QdrantClient",
+            return_value=mock_qdrant_client,
+        ):
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
+            result = indexer.delete_tenant_collection()
+            self.assertTrue(result)
+            mock_qdrant_client.delete_collection.assert_called_once_with(self.collection_name)
+
+    def test_tenant_collection_deletion_error(self):
+        mock_qdrant_client = MagicMock()
+        mock_qdrant_client.delete_collection.side_effect = UnexpectedResponse(
+            status_code=404,
+            reason_phrase="Not Found",
+            content=b"Collection not found",
+            headers={"Content-Type": "text/plain"},
+        )
+
+        with patch(
+            "app.indexer.QdrantClient",
+            return_value=mock_qdrant_client,
+        ):
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
+            with self.assertRaises(UnexpectedResponse):
+                indexer.delete_tenant_collection()
+
+    def test_tenant_metadata_in_points(self):
+        mock_qdrant_client = MagicMock()
+        mock_embedding_provider = MagicMock()
+        mock_embedding_provider.embed.return_value = [[0.1, 0.2]]
+
+        with patch(
+            "app.indexer.QdrantClient",
+            return_value=mock_qdrant_client,
+        ):
+            indexer = QdrantIndexer(tenant_id=self.tenant_id)
+            metadata = {"buckets": [{"id": "test_bucket"}]}
+            indexer.index_metadata(metadata, mock_embedding_provider)
+
+            # Verify tenant_id is included in point payload
+            upsert_calls = mock_qdrant_client.upsert.call_args_list
+            for call in upsert_calls:
+                points = call[1]["points"]
+                for point in points:
+                    self.assertEqual(point.payload.get("tenant_id"), self.tenant_id)
