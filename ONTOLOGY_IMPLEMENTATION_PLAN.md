@@ -90,7 +90,7 @@ graphviz>=0.20.1
 
 - [x] Step 1: Create Core Ontology Module Structure
 - [x] Step 2: Define RDF Schema and Basic Ontology Structure
-- [ ] Step 3: Implement Ontology Builder using LLMs
+- [x] Step 3: Implement Ontology Builder using LLMs
 - [ ] Step 4: Create Action Graph Generator
 - [ ] Step 5: Integrate with Existing Components
 - [ ] Step 6: Implement RDF Storage and Querying
