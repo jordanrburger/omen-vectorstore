@@ -35,13 +35,26 @@ ENTITY_EXTRACTION_PROMPT_TEMPLATE = """
 # Instructions
 Extract all entities from the provided metadata according to the entity types defined above.
 For each entity:
-1. Determine its type based on the entity type definitions
+1. Determine its type based on the entity type definitions 
 2. Extract all available properties, ensuring required properties are included
 3. Generate a unique ID for each entity if not present in the metadata
 
+IMPORTANT: Entity types MUST be one of the exact values from this list (case-sensitive): 
+- table
+- column
+- bucket
+- configuration 
+- transformation
+- block
+- orchestration
+- task
+- component
+- project
+- generic
+
 Output the entities as a JSON array, where each object has:
 - "id": A unique identifier for the entity
-- "type": The entity type (must match one of the defined types)
+- "type": The entity type (must match one of the defined types EXACTLY as listed above)
 - "properties": An object containing all the extracted properties
 
 Only include properties that are explicitly present in the metadata or can be directly inferred.
@@ -58,8 +71,11 @@ Follow these guidelines:
 1. Analyze the entities and identify all possible relationships between them
 2. Only identify relationships that are explicitly supported by the entity data
 3. Ensure relationships follow the allowed relationship types defined in the schema
-4. Format the output as a valid JSON object
+4. Format the output as a valid JSON object with a 'relationships' array
 5. Be precise, avoiding hallucination or inference not supported by the entity data
+6. Always output JSON in the exact format requested - never respond with explanations or free text
+
+Remember: The output MUST be valid JSON with relationships that match the specified schema exactly.
 """
 
 RELATIONSHIP_DETECTION_PROMPT_TEMPLATE = """
@@ -79,15 +95,66 @@ For each relationship:
 3. Ensure the relationship adheres to the cardinality and type constraints
 4. Add relevant properties to the relationship
 
-Output the relationships as a JSON array, where each object has:
-- "id": A unique identifier for the relationship
-- "type": The relationship type (must match one of the defined types)
-- "source_id": The ID of the source entity
-- "target_id": The ID of the target entity
-- "properties": An object containing any additional properties for the relationship
+IMPORTANT: Relationship types MUST be one of the exact values from this list (case-sensitive): 
+- hasColumn
+- belongsTo
+- dependsOn
+- inputsFrom
+- outputsTo
+- partOf
+- linkedTo
+- createdBy
+- triggers
+- contains
+- generic
+
+When creating relationships, strictly follow these rules:
+1. Ensure that the source and target entity types are valid for the chosen relationship type
+2. For CONTAINS relationships:
+   - Only PROJECT can contain BUCKET
+   - Only BUCKET can contain TABLE
+   - Only COMPONENT can contain CONFIGURATION
+   - Only TRANSFORMATION can contain BLOCK
+   - Only ORCHESTRATION can contain TASK
+3. For BELONGS_TO relationships:
+   - Only COLUMN can belong to TABLE
+   - Only CONFIGURATION can belong to COMPONENT
+4. For PART_OF relationships:
+   - Only BLOCK can be part of TRANSFORMATION
+   - Only TASK can be part of ORCHESTRATION
+
+Required Output Format:
+```json
+{
+  "relationships": [
+    {
+      "id": "unique_id_1",
+      "type": "hasColumn",
+      "source_id": "source_entity_id",
+      "target_id": "target_entity_id",
+      "properties": {}
+    },
+    {
+      "id": "unique_id_2",
+      "type": "belongsTo",
+      "source_id": "source_entity_id",
+      "target_id": "target_entity_id",
+      "properties": {}
+    }
+  ]
+}
+```
+
+If no relationships can be identified, return an empty array:
+```json
+{
+  "relationships": []
+}
+```
 
 Only include relationships that are clearly indicated by the entity data.
 Do not include relationships that are speculative or cannot be determined with high confidence.
+Respond ONLY with the JSON object - do not include any explanations or additional text.
 """
 
 # Triple validation prompts

@@ -2,6 +2,7 @@ import logging
 from typing import List, Dict, Any
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+from app.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -9,7 +10,14 @@ def search_metadata(query: str, embedding_provider, limit: int = 10) -> List[Dic
     """
     Search for metadata using semantic search.
     """
-    client = QdrantClient(host="localhost", port=55000)
+    config = Config.from_env()
+    client = QdrantClient(
+        host=config.qdrant_host,
+        port=config.qdrant_port,
+        api_key=config.qdrant_api_key,
+        prefer_grpc=False,
+        https=False  # Disable HTTPS for local connections
+    )
     
     # Generate embedding for the query
     query_embedding = embedding_provider.embed(query)
@@ -24,10 +32,25 @@ def search_metadata(query: str, embedding_provider, limit: int = 10) -> List[Dic
     # Format results
     results = []
     for hit in search_result:
-        results.append({
+        # Extract only the essential metadata
+        metadata = hit.payload.get("metadata", {})
+        formatted_result = {
             "score": hit.score,
-            "metadata": hit.payload
-        })
+            "metadata_type": metadata.get("type", "unknown"),
+            "id": metadata.get("id", ""),
+            "name": metadata.get("name", ""),
+            "description": metadata.get("description", ""),
+        }
+        
+        # Add component info if available
+        if "component" in metadata:
+            formatted_result["component"] = {
+                "id": metadata["component"].get("id", ""),
+                "type": metadata["component"].get("type", ""),
+                "name": metadata["component"].get("name", "")
+            }
+        
+        results.append(formatted_result)
     
     return results
 

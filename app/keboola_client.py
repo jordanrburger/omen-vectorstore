@@ -1,10 +1,11 @@
 import logging
-from typing import Dict, Generator, List, Optional
+from typing import Dict, Generator, List, Optional, Any
 
 import requests
 from kbcstorage.client import Client
 
 from app.state_manager import StateManager
+from app.ontology.models import Entity, EntityType, Relationship, RelationshipType
 
 
 class KeboolaClient:
@@ -137,11 +138,17 @@ class KeboolaClient:
                 # Get fresh table details and process columns
                 details = self.get_table_details(table_id)
                 if details:
+                    # Debug logging
+                    logging.info(f"Table details response: {details}")
+                    
                     # Extract and process columns
                     if "columns" in details:
                         metadata["columns"][bucket_id][table_id] = []
                         enriched_columns = []
                         for column in details["columns"]:
+                            if isinstance(column, str):
+                                logging.warning(f"Column is a string instead of a dictionary: {column}")
+                                continue
                             column_id = f"{table_id}.{column.get('name', 'unknown')}"
                             # When table has changed, create fresh metadata
                             enriched_column = {}
@@ -216,6 +223,211 @@ class KeboolaClient:
         self.state_manager.save_metadata(metadata)
 
         return metadata
+
+    def extract_ontology_metadata(self, force_full: bool = False) -> Dict[str, Any]:
+        """Extract metadata specifically for ontology building.
+        
+        This method extracts metadata in a format suitable for building the ontology,
+        including entities and their relationships.
+        
+        Args:
+            force_full: Whether to force a full extraction ignoring state
+            
+        Returns:
+            Dictionary containing ontology-specific metadata
+        """
+        logging.info("Starting ontology metadata extraction (force_full=%s)", force_full)
+        
+        # Load previous state and metadata
+        state = self.state_manager.load_extraction_state()
+        previous_metadata = (
+            self.state_manager.load_metadata() if not force_full else None
+        )
+        
+        # Initialize new state and metadata
+        new_state = {
+            "bucket_hashes": {},
+            "table_hashes": {},
+            "config_hashes": {},
+            "config_row_hashes": {},
+            "column_hashes": {},
+        }
+        
+        ontology_metadata = {
+            "entities": [],
+            "relationships": [],
+        }
+        
+        # Extract buckets and their metadata
+        for bucket in self.list_buckets_paginated():
+            bucket_id = bucket.get("id", "unknown")
+            bucket_hash = self.state_manager.compute_hash(bucket)
+            new_state["bucket_hashes"][bucket_id] = bucket_hash
+            
+            # Create bucket entity
+            bucket_entity = {
+                "id": bucket_id,
+                "type": EntityType.BUCKET.name,
+                "properties": {
+                    "name": bucket.get("name", ""),
+                    "description": bucket.get("description", ""),
+                    "stage": bucket.get("stage", ""),
+                    "backend": bucket.get("backend", ""),
+                }
+            }
+            ontology_metadata["entities"].append(bucket_entity)
+            
+            # Extract tables for this bucket
+            for table in self.list_tables_paginated(bucket_id):
+                table_id = table.get("id", "unknown")
+                table_hash = self.state_manager.compute_hash(table)
+                new_state["table_hashes"][table_id] = table_hash
+                
+                # Create table entity
+                table_entity = {
+                    "id": table_id,
+                    "type": EntityType.TABLE.name,
+                    "properties": {
+                        "name": table.get("name", ""),
+                        "description": table.get("description", ""),
+                        "primary_key": table.get("primaryKey", []),
+                        "row_count": table.get("rowCount", 0),
+                    }
+                }
+                ontology_metadata["entities"].append(table_entity)
+                
+                # Create CONTAINS relationship between bucket and table
+                contains_rel = {
+                    "id": f"contains_{bucket_id}_{table_id}",
+                    "type": RelationshipType.CONTAINS.name,
+                    "source_id": bucket_id,
+                    "target_id": table_id,
+                    "properties": {}
+                }
+                ontology_metadata["relationships"].append(contains_rel)
+                
+                # Get table details and process columns
+                details = self.get_table_details(table_id)
+                if details:
+                    for column in details.get("columns", []):
+                        column_id = f"{table_id}.{column.get('name', '')}"
+                        column_hash = self.state_manager.compute_hash(column)
+                        new_state["column_hashes"][column_id] = column_hash
+                        
+                        # Create column entity
+                        column_entity = {
+                            "id": column_id,
+                            "type": EntityType.COLUMN.name,
+                            "properties": {
+                                "name": column.get("name", ""),
+                                "type": column.get("type", ""),
+                                "basetype": column.get("basetype", ""),
+                                "description": column.get("description", ""),
+                                "nullable": column.get("nullable", True),
+                                "length": column.get("length"),
+                                "default": column.get("default"),
+                            }
+                        }
+                        ontology_metadata["entities"].append(column_entity)
+                        
+                        # Create HAS_COLUMN relationship between table and column
+                        has_column_rel = {
+                            "id": f"has_column_{table_id}_{column_id}",
+                            "type": RelationshipType.HAS_COLUMN.name,
+                            "source_id": table_id,
+                            "target_id": column_id,
+                            "properties": {}
+                        }
+                        ontology_metadata["relationships"].append(has_column_rel)
+        
+        # Extract configurations and their relationships
+        try:
+            components = self.client.components.list()
+            for component in components:
+                component_id = component.get("id")
+                
+                # Create component entity
+                component_entity = {
+                    "id": component_id,
+                    "type": EntityType.COMPONENT.name,
+                    "properties": {
+                        "name": component.get("name", ""),
+                        "type": component.get("type", ""),
+                        "description": component.get("description", ""),
+                        "version": component.get("version", ""),
+                    }
+                }
+                ontology_metadata["entities"].append(component_entity)
+                
+                try:
+                    configs = list(self.list_configurations_paginated(component_id))
+                    for config in configs:
+                        config_id = config.get("id")
+                        config_hash = self.state_manager.compute_hash(config)
+                        new_state["config_hashes"][config_id] = config_hash
+                        
+                        # Create configuration entity
+                        config_entity = {
+                            "id": config_id,
+                            "type": EntityType.CONFIGURATION.name,
+                            "properties": {
+                                "name": config.get("name", ""),
+                                "description": config.get("description", ""),
+                                "version": config.get("version", ""),
+                            }
+                        }
+                        ontology_metadata["entities"].append(config_entity)
+                        
+                        # Create BELONGS_TO relationship between config and component
+                        belongs_to_rel = {
+                            "id": f"belongs_to_{config_id}_{component_id}",
+                            "type": RelationshipType.BELONGS_TO.name,
+                            "source_id": config_id,
+                            "target_id": component_id,
+                            "properties": {}
+                        }
+                        ontology_metadata["relationships"].append(belongs_to_rel)
+                        
+                        # Process configuration rows
+                        try:
+                            for row in self.list_config_rows_paginated(component_id, config_id):
+                                row_id = row.get("id")
+                                row_hash = self.state_manager.compute_hash(row)
+                                new_state["config_row_hashes"][row_id] = row_hash
+                                
+                                # Create configuration row entity
+                                row_entity = {
+                                    "id": row_id,
+                                    "type": EntityType.CONFIG_ROW.name,
+                                    "properties": {
+                                        "name": row.get("name", ""),
+                                        "description": row.get("description", ""),
+                                        "configuration": row.get("configuration", {}),
+                                    }
+                                }
+                                ontology_metadata["entities"].append(row_entity)
+                                
+                                # Create BELONGS_TO relationship between row and config
+                                row_belongs_to_rel = {
+                                    "id": f"belongs_to_{row_id}_{config_id}",
+                                    "type": RelationshipType.BELONGS_TO.name,
+                                    "source_id": row_id,
+                                    "target_id": config_id,
+                                    "properties": {}
+                                }
+                                ontology_metadata["relationships"].append(row_belongs_to_rel)
+                        except Exception as e:
+                            logging.debug(f"Config {config_id} doesn't support rows: {e}")
+                except Exception as e:
+                    logging.error(f"Error fetching configurations for component {component_id}: {e}")
+        except Exception as e:
+            logging.error(f"Error fetching components: {e}")
+        
+        # Save new state and metadata
+        self.state_manager.save_extraction_state(new_state)
+        self.state_manager.save_metadata(ontology_metadata)
+        
+        return ontology_metadata
 
     def list_buckets_paginated(
         self, offset: int = 0, limit: int = 100

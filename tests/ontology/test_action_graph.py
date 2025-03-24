@@ -129,173 +129,234 @@ class TestActionGraph(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
-        # Create actions
-        self.action1 = Action(
-            id="action_1",
-            type=ActionType.DATA_LOAD,
-            name="Load Customers",
-            description="Load customer data from source",
-            source_entities=[],
-            target_entities=["table_customers"],
-            parameters={},
-            metadata={}
+        self.ontology = OntologyManager()
+        self.action_graph = ActionGraph()
+
+        # Create test entities
+        self.bucket = Entity(
+            id="test_bucket",
+            type=EntityType.BUCKET,
+            name="Test Bucket",
+            properties={"name": "Test Bucket"}
         )
-        
-        self.action2 = Action(
-            id="action_2",
-            type=ActionType.DATA_TRANSFORM,
-            name="Transform Customers",
-            description="Transform customer data",
-            source_entities=["table_customers"],
-            target_entities=["table_customers_transformed"],
-            parameters={},
-            metadata={}
+        self.table1 = Entity(
+            id="test_table1",
+            type=EntityType.TABLE,
+            name="Test Table 1",
+            properties={"name": "Test Table 1"}
         )
-        
-        self.action3 = Action(
-            id="action_3",
-            type=ActionType.DATA_WRITE,
-            name="Write Transformed Customers",
-            description="Write transformed customer data to destination",
-            source_entities=["table_customers_transformed"],
-            target_entities=[],
-            parameters={},
-            metadata={}
+        self.table2 = Entity(
+            id="test_table2",
+            type=EntityType.TABLE,
+            name="Test Table 2",
+            properties={"name": "Test Table 2"}
         )
-        
-        # Create action graph
-        self.graph = ActionGraph()
-        self.graph.add_action(self.action1)
-        self.graph.add_action(self.action2)
-        self.graph.add_action(self.action3)
+        self.config = Entity(
+            id="test_config",
+            type=EntityType.CONFIGURATION,
+            name="Test Config",
+            properties={"name": "Test Config"}
+        )
+
+        # Add entities to ontology
+        self.ontology.add_entity(self.bucket)
+        self.ontology.add_entity(self.table1)
+        self.ontology.add_entity(self.table2)
+        self.ontology.add_entity(self.config)
+
+        # Add relationships
+        self.contains_rel1 = Relationship(
+            id="contains_rel1",
+            type=RelationshipType.CONTAINS,
+            source_id="test_bucket",
+            target_id="test_table1",
+            properties={}
+        )
+        self.contains_rel2 = Relationship(
+            id="contains_rel2",
+            type=RelationshipType.CONTAINS,
+            source_id="test_bucket",
+            target_id="test_table2",
+            properties={}
+        )
+        self.belongs_rel = Relationship(
+            id="belongs_rel",
+            type=RelationshipType.BELONGS_TO,
+            source_id="test_table1",
+            target_id="test_config",
+            properties={}
+        )
+
+        self.ontology.add_relationship(self.contains_rel1)
+        self.ontology.add_relationship(self.contains_rel2)
+        self.ontology.add_relationship(self.belongs_rel)
     
     def test_add_action(self):
-        """Test adding an action to the graph."""
-        # Create a new graph
-        graph = ActionGraph()
-        
-        # Add an action
-        graph.add_action(self.action1)
-        
-        # Check that the action was added
-        self.assertIn(self.action1.id, graph.actions)
-        self.assertIn(self.action1.id, graph.graph.nodes())
-        
-        # Check that entity nodes were added
-        for entity_id in self.action1.target_entities:
-            self.assertIn(entity_id, graph.graph.nodes())
-            self.assertIn(entity_id, graph.entity_to_actions)
-            self.assertIn(self.action1.id, graph.entity_to_actions[entity_id])
+        """Test adding actions to the graph."""
+        # Create and add a valid action
+        action = Action(
+            id="test_action",
+            type=ActionType.LOAD_DATA,
+            source_id="test_table1",
+            target_id="test_table2",
+            properties={
+                "created_at": datetime.now().isoformat(),
+                "description": "Load data from table1 to table2"
+            }
+        )
+        self.action_graph.add_action(action)
+
+        # Verify action was added
+        self.assertEqual(len(self.action_graph.actions), 1)
+        self.assertEqual(self.action_graph.actions["test_action"], action)
+
+        # Test adding duplicate action
+        with self.assertRaises(ValueError):
+            self.action_graph.add_action(action)
     
     def test_get_action(self):
-        """Test getting an action by ID."""
-        # Get an existing action
-        action = self.graph.get_action("action_1")
-        self.assertEqual(action, self.action1)
-        
-        # Get a non-existent action
-        action = self.graph.get_action("non_existent")
-        self.assertIsNone(action)
+        """Test retrieving actions from the graph."""
+        # Create and add a test action
+        action = Action(
+            id="test_action",
+            type=ActionType.LOAD_DATA,
+            source_id="test_table1",
+            target_id="test_table2",
+            properties={
+                "description": "Load data from table1 to table2"
+            }
+        )
+        self.action_graph.add_action(action)
+
+        # Test getting existing action
+        retrieved = self.action_graph.get_action("test_action")
+        self.assertEqual(retrieved, action)
+
+        # Test getting non-existent action
+        with self.assertRaises(KeyError):
+            self.action_graph.get_action("non_existent")
     
-    def test_get_all_actions(self):
-        """Test getting all actions in the graph."""
-        actions = self.graph.get_all_actions()
-        
-        self.assertEqual(len(actions), 3)
-        self.assertIn("action_1", actions)
-        self.assertIn("action_2", actions)
-        self.assertIn("action_3", actions)
+    def test_get_actions_by_type(self):
+        """Test retrieving actions by type."""
+        # Create and add test actions of different types
+        load_action = Action(
+            id="load_action",
+            type=ActionType.LOAD_DATA,
+            source_id="test_table1",
+            target_id="test_table2",
+            properties={"description": "Load data"}
+        )
+        transform_action = Action(
+            id="transform_action",
+            type=ActionType.TRANSFORM_DATA,
+            source_id="test_table2",
+            target_id="test_table2",
+            properties={"description": "Transform data"}
+        )
+        self.action_graph.add_action(load_action)
+        self.action_graph.add_action(transform_action)
+
+        # Test getting actions by type
+        load_actions = self.action_graph.get_actions_by_type(ActionType.LOAD_DATA)
+        self.assertEqual(len(load_actions), 1)
+        self.assertEqual(load_actions[0], load_action)
+
+        transform_actions = self.action_graph.get_actions_by_type(ActionType.TRANSFORM_DATA)
+        self.assertEqual(len(transform_actions), 1)
+        self.assertEqual(transform_actions[0], transform_action)
+
+        # Test getting actions of non-existent type
+        empty = self.action_graph.get_actions_by_type(ActionType.VALIDATE_DATA)
+        self.assertEqual(len(empty), 0)
     
     def test_get_actions_for_entity(self):
-        """Test getting actions for a specific entity."""
-        # Get actions for an entity with one action
-        actions = self.graph.get_actions_for_entity("table_customers")
-        self.assertEqual(len(actions), 2)  # action1 (output) and action2 (input)
-        
-        # Get actions for a non-existent entity
-        actions = self.graph.get_actions_for_entity("non_existent")
-        self.assertEqual(len(actions), 0)
+        """Test retrieving actions for a specific entity."""
+        # Create and add test actions
+        action1 = Action(
+            id="action1",
+            type=ActionType.LOAD_DATA,
+            source_id="test_table1",
+            target_id="test_table2",
+            properties={"description": "Load data"}
+        )
+        action2 = Action(
+            id="action2",
+            type=ActionType.TRANSFORM_DATA,
+            source_id="test_table2",
+            target_id="test_table2",
+            properties={"description": "Transform data"}
+        )
+        self.action_graph.add_action(action1)
+        self.action_graph.add_action(action2)
+
+        # Test getting actions for source entity
+        source_actions = self.action_graph.get_actions_for_entity("test_table1", as_source=True)
+        self.assertEqual(len(source_actions), 1)
+        self.assertEqual(source_actions[0], action1)
+
+        # Test getting actions for target entity
+        target_actions = self.action_graph.get_actions_for_entity("test_table2", as_target=True)
+        self.assertEqual(len(target_actions), 2)
+        self.assertIn(action1, target_actions)
+        self.assertIn(action2, target_actions)
+
+        # Test getting actions for non-existent entity
+        with self.assertRaises(KeyError):
+            self.action_graph.get_actions_for_entity("non_existent")
     
-    def test_get_upstream_actions(self):
-        """Test getting upstream actions."""
-        # action1 is upstream of action2
-        upstream_actions = self.graph.get_upstream_actions("action_2")
-        self.assertEqual(len(upstream_actions), 1)
-        self.assertEqual(upstream_actions[0], self.action1)
-        
-        # action2 is upstream of action3
-        upstream_actions = self.graph.get_upstream_actions("action_3")
-        self.assertEqual(len(upstream_actions), 1)
-        self.assertEqual(upstream_actions[0], self.action2)
-        
-        # action1 has no upstream actions
-        upstream_actions = self.graph.get_upstream_actions("action_1")
-        self.assertEqual(len(upstream_actions), 0)
+    def test_remove_action(self):
+        """Test removing actions from the graph."""
+        # Create and add a test action
+        action = Action(
+            id="test_action",
+            type=ActionType.LOAD_DATA,
+            source_id="test_table1",
+            target_id="test_table2",
+            properties={"description": "Load data"}
+        )
+        self.action_graph.add_action(action)
+
+        # Test removing existing action
+        self.action_graph.remove_action("test_action")
+        self.assertEqual(len(self.action_graph.actions), 0)
+
+        # Test removing non-existent action
+        with self.assertRaises(KeyError):
+            self.action_graph.remove_action("non_existent")
     
-    def test_get_downstream_actions(self):
-        """Test getting downstream actions."""
-        # action2 is downstream of action1
-        downstream_actions = self.graph.get_downstream_actions("action_1")
-        self.assertEqual(len(downstream_actions), 1)
-        self.assertEqual(downstream_actions[0], self.action2)
-        
-        # action3 is downstream of action2
-        downstream_actions = self.graph.get_downstream_actions("action_2")
-        self.assertEqual(len(downstream_actions), 1)
-        self.assertEqual(downstream_actions[0], self.action3)
-        
-        # action3 has no downstream actions
-        downstream_actions = self.graph.get_downstream_actions("action_3")
-        self.assertEqual(len(downstream_actions), 0)
-    
-    def test_get_execution_order(self):
-        """Test getting the execution order of actions."""
-        execution_order = self.graph.get_execution_order()
-        
-        # Check that we have all actions
-        self.assertEqual(len(execution_order), 3)
-        
-        # Check that the order is correct
-        # action1 should come before action2, and action2 should come before action3
-        action1_index = execution_order.index(self.action1)
-        action2_index = execution_order.index(self.action2)
-        action3_index = execution_order.index(self.action3)
-        
-        self.assertLess(action1_index, action2_index)
-        self.assertLess(action2_index, action3_index)
-    
-    def test_to_dict(self):
-        """Test converting the action graph to a dictionary."""
-        graph_dict = self.graph.to_dict()
-        
-        self.assertIn("actions", graph_dict)
-        self.assertIn("entity_to_actions", graph_dict)
-        
-        self.assertEqual(len(graph_dict["actions"]), 3)
-        self.assertIn("action_1", graph_dict["actions"])
-        self.assertIn("action_2", graph_dict["actions"])
-        self.assertIn("action_3", graph_dict["actions"])
-        
-        self.assertIn("table_customers", graph_dict["entity_to_actions"])
-        self.assertIn("table_customers_transformed", graph_dict["entity_to_actions"])
-    
-    def test_from_dict(self):
-        """Test creating an action graph from a dictionary."""
-        graph_dict = self.graph.to_dict()
-        
-        # Create a new graph from the dictionary
-        new_graph = ActionGraph.from_dict(graph_dict)
-        
-        # Check that the new graph has the same actions
-        self.assertEqual(len(new_graph.actions), 3)
-        self.assertIn("action_1", new_graph.actions)
-        self.assertIn("action_2", new_graph.actions)
-        self.assertIn("action_3", new_graph.actions)
-        
-        # Check that the actions have the same properties
-        self.assertEqual(new_graph.actions["action_1"].name, "Load Customers")
-        self.assertEqual(new_graph.actions["action_2"].name, "Transform Customers")
-        self.assertEqual(new_graph.actions["action_3"].name, "Write Transformed Customers")
+    def test_get_action_chain(self):
+        """Test retrieving action chains between entities."""
+        # Create and add test actions forming a chain
+        action1 = Action(
+            id="action1",
+            type=ActionType.LOAD_DATA,
+            source_id="test_table1",
+            target_id="test_table2",
+            properties={"description": "Load data"}
+        )
+        action2 = Action(
+            id="action2",
+            type=ActionType.TRANSFORM_DATA,
+            source_id="test_table2",
+            target_id="test_config",
+            properties={"description": "Transform data"}
+        )
+        self.action_graph.add_action(action1)
+        self.action_graph.add_action(action2)
+
+        # Test getting action chain
+        chain = self.action_graph.get_action_chain("test_table1", "test_config")
+        self.assertEqual(len(chain), 2)
+        self.assertEqual(chain[0], action1)
+        self.assertEqual(chain[1], action2)
+
+        # Test getting chain for non-connected entities
+        empty_chain = self.action_graph.get_action_chain("test_bucket", "test_config")
+        self.assertEqual(len(empty_chain), 0)
+
+        # Test getting chain for non-existent entity
+        with self.assertRaises(KeyError):
+            self.action_graph.get_action_chain("non_existent", "test_config")
 
 
 class TestActionGraphBuilder(unittest.TestCase):

@@ -1,0 +1,12 @@
+# Cursor Rules
+
+# 1. When the user repeats instructions, add those repeated points to this file to avoid redundancy and improve communication clarity.
+# 2. Always check previous communication for repeated details before asking for new instructions.
+# 3. Automatically incorporate repeated points into the project documentation to be consistent and efficient.
+
+# CRITICAL SECURITY RULES
+# 1. NEVER modify .env files or any files containing credentials
+# 2. NEVER attempt to rewrite or suggest changes to existing credentials
+# 3. If environment configuration needs to be changed, only suggest the changes to the user
+
+# These rules help ensure that the development process is as efficient and clear as possible. 

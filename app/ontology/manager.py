@@ -336,4 +336,57 @@ class OntologyManager:
             return None
         except Exception as e:
             logger.error(f"Error visualizing ontology: {e}")
-            return None 
+            return None
+    
+    def to_dict(self) -> dict:
+        """
+        Convert the ontology manager to a dictionary.
+        
+        Returns:
+            Dictionary representation of the ontology manager
+        """
+        return {
+            "entities": {
+                key: entity.to_dict() for key, entity in self.entities.items()
+            },
+            "relationships": {
+                key: rel.to_dict() for key, rel in self.relationships.items()
+            },
+            "entity_types": [et.value for et in self.entity_types],
+            "relationship_types": [rt.value for rt in self.relationship_types]
+        }
+    
+    def from_dict(self, data: dict) -> None:
+        """
+        Load ontology data from a dictionary.
+        
+        Args:
+            data: Dictionary representation of the ontology
+        """
+        from app.ontology.models import EntityType, RelationshipType, Entity, Relationship
+        
+        # Clear existing data
+        self.clear()
+        
+        # Load entities
+        if "entities" in data:
+            self.entities = {
+                key: Entity.from_dict(entity_data) 
+                for key, entity_data in data["entities"].items()
+            }
+            self.entity_types = {entity.type for entity in self.entities.values()}
+        
+        # Load relationships
+        if "relationships" in data:
+            self.relationships = {
+                key: Relationship.from_dict(rel_data) 
+                for key, rel_data in data["relationships"].items()
+            }
+            self.relationship_types = {rel.type for rel in self.relationships.values()}
+        
+        # Reload triples into the triple store
+        for entity in self.entities.values():
+            self.triple_store.add_entity(entity)
+            
+        for relationship in self.relationships.values():
+            self.triple_store.add_relationship(relationship) 

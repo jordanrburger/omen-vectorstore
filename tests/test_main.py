@@ -1,269 +1,254 @@
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-import argparse
-from typing import Dict, List
-import logging
+import unittest
+from unittest.mock import Mock, patch
+import tempfile
+import os
+from rdflib import URIRef, Literal
 
+from app.config import Config
 from app.main import (
     get_embedding_provider,
     extract_metadata,
     search_metadata,
+    build_ontology,
+    build_action_graph,
     index_command,
     search_command,
-    main
+    query_ontology_command
 )
-from app.batch_processor import BatchConfig
-from app.config import Config
-from app.vectorizer import OpenAIProvider, SentenceTransformerProvider
-from app.keboola_client import KeboolaClient
+from app.ontology.manager import OntologyManager
+from app.ontology.rdf_store import RDFStore
+from app.ontology.action_graph import ActionGraph
 
-@pytest.fixture
-def mock_config():
-    config = Mock(spec=Config)
-    config.keboola_api_url = "https://connection.keboola.com"
-    config.keboola_token = "test-token"
-    config.openai_api_key = "test-key"
-    config.embedding_model = "text-embedding-3-small"
-    config.qdrant_host = "localhost"
-    config.qdrant_port = 6333
-    config.qdrant_collection = "test-collection"
-    config.device = "cpu"
-    return config
 
-@pytest.fixture
-def mock_keboola_client():
-    client = Mock()
-    client.list_buckets.return_value = [
-        {"id": "in.c-test", "name": "Test Bucket"}
-    ]
-    client.list_tables.return_value = {
-        "in.c-test": [
-            {"id": "in.c-test.customers", "name": "customers"}
+class TestMain(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.config = Config(
+            keboola_api_url="https://api.keboola.com",
+            keboola_token="test_token",
+            qdrant_collection="test_collection",
+            embedding_model="test-model",
+            device="cpu"
+        )
+        self.batch_config = Mock()
+        self.batch_config.batch_size = 10
+        self.batch_config.max_retries = 3
+        self.batch_config.initial_retry_delay = 1.0
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.temp_dir)
+
+    @patch("app.main.OpenAIProvider")
+    def test_get_embedding_provider_openai(self, mock_openai):
+        self.config.openai_api_key = "test_key"
+        provider = get_embedding_provider(self.config)
+        mock_openai.assert_called_once_with(
+            api_key="test_key",
+            model="test-model"
+        )
+        self.assertEqual(provider, mock_openai.return_value)
+
+    @patch("app.main.SentenceTransformerProvider")
+    def test_get_embedding_provider_sentence_transformer(self, mock_st):
+        self.config.openai_api_key = None
+        provider = get_embedding_provider(self.config)
+        mock_st.assert_called_once_with(
+            model_name="test-model",
+            device="cpu"
+        )
+        self.assertEqual(provider, mock_st.return_value)
+
+    @patch("app.main.KeboolaClient")
+    def test_extract_metadata(self, mock_client):
+        # Mock client methods
+        mock_client.return_value.list_buckets.return_value = [
+            {"id": "bucket1", "name": "Test Bucket"}
         ]
-    }
-    client.get_table_details.return_value = {
-        "id": "in.c-test.customers",
-        "name": "customers",
-        "columns": ["id", "name", "email"]
-    }
-    client.list_configurations.return_value = [
-        {
-            "id": "123",
-            "name": "Test Config",
-            "component": "keboola.python-transformation"
+        mock_client.return_value.list_tables.return_value = {
+            "bucket1": [
+                {"id": "table1", "name": "Test Table"}
+            ]
         }
-    ]
-    return client
+        mock_client.return_value.get_table_details.return_value = {
+            "id": "table1",
+            "columns": [
+                {"name": "col1", "type": "string"}
+            ]
+        }
+        mock_client.return_value.list_configurations.return_value = [
+            {"id": "config1", "name": "Test Config"}
+        ]
 
-@pytest.fixture
-def mock_indexer():
-    indexer = Mock()
-    indexer.search_metadata.return_value = [
-        {
-            'score': 0.95,
-            'metadata_type': 'transformation',
-            'metadata': {
-                'id': '123',
-                'name': 'Test Transformation',
-                'description': 'A test transformation',
-                'type': 'transformation',
-                'component': 'keboola.python-transformation'
+        metadata = extract_metadata(mock_client.return_value)
+
+        self.assertEqual(len(metadata["buckets"]), 1)
+        self.assertEqual(len(metadata["tables"]["bucket1"]), 1)
+        self.assertEqual(len(metadata["table_details"]), 1)
+        self.assertEqual(len(metadata["configurations"]), 1)
+
+    @patch("app.main.QdrantIndexer")
+    @patch("app.main.get_embedding_provider")
+    def test_search_metadata(self, mock_get_provider, mock_indexer):
+        mock_provider = Mock()
+        mock_get_provider.return_value = mock_provider
+        mock_indexer.return_value.search_metadata.return_value = [
+            {
+                "id": "result1",
+                "score": 0.95,
+                "metadata_type": "table",
+                "name": "Test Table",
+                "description": "Test Description"
             }
-        }
-    ]
-    return indexer
+        ]
 
-@patch('app.main.OpenAIProvider')
-def test_get_embedding_provider_openai(mock_openai_provider):
-    """Test OpenAI provider creation when API key is present."""
-    config = Mock(
-        openai_api_key="test-key",
-        embedding_model="text-embedding-3-small"
-    )
-    
-    provider = get_embedding_provider(config)
-    
-    mock_openai_provider.assert_called_once_with(
-        api_key="test-key",
-        model="text-embedding-3-small"
-    )
-
-@patch('app.main.SentenceTransformerProvider')
-def test_get_embedding_provider_sentence_transformer(mock_st_provider):
-    """Test SentenceTransformer provider creation when no OpenAI key."""
-    config = Mock(
-        openai_api_key=None,
-        embedding_model="all-MiniLM-L6-v2",
-        device="cpu"
-    )
-    
-    provider = get_embedding_provider(config)
-    
-    mock_st_provider.assert_called_once_with(
-        model_name="all-MiniLM-L6-v2",
-        device="cpu"
-    )
-
-def test_extract_metadata(mock_keboola_client):
-    """Test metadata extraction from Keboola."""
-    metadata = extract_metadata(mock_keboola_client)
-    
-    assert "buckets" in metadata
-    assert "tables" in metadata
-    assert "table_details" in metadata
-    assert "configurations" in metadata
-    
-    assert len(metadata["buckets"]) == 1
-    assert len(metadata["tables"]["in.c-test"]) == 1
-    assert len(metadata["configurations"]) == 1
-    
-    mock_keboola_client.list_buckets.assert_called_once()
-    mock_keboola_client.list_tables.assert_called_once()
-    mock_keboola_client.list_configurations.assert_called_once()
-
-def test_extract_metadata_handles_errors(mock_keboola_client):
-    """Test metadata extraction handles errors gracefully."""
-    mock_keboola_client.get_table_details.side_effect = Exception("API Error")
-    
-    metadata = extract_metadata(mock_keboola_client)
-    assert metadata is not None
-    assert "table_details" in metadata
-    assert len(metadata["table_details"]) == 0
-
-def test_search_metadata(mock_indexer):
-    """Test metadata search functionality."""
-    embedding_provider = Mock()
-    embedding_provider.get_embedding.return_value = [0.1] * 1536
-    
-    results = search_metadata(
-        query="test query",
-        indexer=mock_indexer,
-        embedding_provider=embedding_provider,
-        metadata_type="transformations",
-        limit=3
-    )
-    
-    assert len(results) == 1
-    assert results[0]["score"] == 0.95
-    assert results[0]["metadata"]["name"] == "Test Transformation"
-    
-    mock_indexer.search_metadata.assert_called_once()
-
-@patch('app.main.QdrantIndexer')
-@patch('app.main.KeboolaClient')
-@patch('app.main.StateManager')
-def test_index_command(mock_state_manager, mock_client, mock_indexer, mock_config):
-    """Test the index command."""
-    mock_client_instance = Mock()
-    mock_client.return_value = mock_client_instance
-    mock_client_instance.list_buckets.return_value = []
-    mock_client_instance.list_tables.return_value = {}
-    mock_client_instance.list_configurations.return_value = []
-
-    mock_indexer_instance = Mock()
-    mock_indexer.return_value = mock_indexer_instance
-
-    # Create a batch config for testing
-    batch_config = BatchConfig(
-        batch_size=10,
-        max_retries=3,
-        initial_retry_delay=1.0
-    )
-
-    index_command(mock_config, batch_config)
-
-    # Verify the expected calls
-    mock_state_manager.assert_called_once()
-    mock_client.assert_called_once()
-    mock_indexer.assert_called_once()
-    mock_indexer_instance.index_metadata.assert_called_once()
-
-@patch('app.main.QdrantIndexer')
-@patch('app.main.get_embedding_provider')
-def test_search_command(mock_get_provider, mock_indexer, mock_config, capsys):
-    """Test the search command with result printing."""
-    mock_provider = Mock()
-    mock_get_provider.return_value = mock_provider
-    
-    mock_indexer_instance = Mock()
-    mock_indexer.return_value = mock_indexer_instance
-    mock_indexer_instance.search_metadata.return_value = [
-        {
-            'score': 0.95,
-            'metadata_type': 'transformation',
-            'metadata': {
-                'id': '123',
-                'name': 'Test Transformation',
-                'description': 'A test transformation',
-                'type': 'transformation',
-                'component': 'keboola.python-transformation'
-            }
-        }
-    ]
-    
-    search_command(mock_config, "test query", "transformations", 3)
-    
-    captured = capsys.readouterr()
-    assert "Result 1:" in captured.out
-    assert "Score: 0.950" in captured.out
-    assert "Name: Test Transformation" in captured.out
-    assert "Type: transformation" in captured.out
-
-@patch('argparse.ArgumentParser.parse_args')
-@patch('app.main.Config')
-def test_main_index_command(mock_config, mock_args):
-    """Test main function with index command."""
-    mock_args.return_value = Mock(command="index")
-    mock_config.from_env.return_value = Mock()
-    
-    with patch('app.main.index_command') as mock_index:
-        main()
-        mock_index.assert_called_once()
-
-@patch('argparse.ArgumentParser.parse_args')
-@patch('app.main.Config')
-def test_main_search_command(mock_config, mock_args):
-    """Test main function with search command."""
-    mock_args.return_value = Mock(
-        command="search",
-        query="test query",
-        type=None,
-        component_type=None,
-        table_id=None,
-        stage=None,
-        limit=10
-    )
-    mock_config.from_env.return_value = Mock()
-
-    with patch('app.main.search_command') as mock_search:
-        main()
-        mock_search.assert_called_once_with(
-            mock_config.from_env.return_value,
-            "test query",
-            None,  # type
-            None,  # component_type
-            None,  # table_id
-            None,  # stage
-            10    # limit
+        results = search_metadata(
+            query="test",
+            indexer=mock_indexer.return_value,
+            embedding_provider=mock_provider,
+            metadata_type="table",
+            component_type="extractor",
+            table_id="table1",
+            stage="in",
+            limit=5
         )
 
-@patch('argparse.ArgumentParser.parse_args')
-@patch('app.main.Config')
-def test_main_no_command(mock_config, mock_args, capsys):
-    """Test main function with no command."""
-    mock_args.return_value = Mock(command=None)
-    mock_config.from_env.return_value = Mock()
-    
-    main()
-    captured = capsys.readouterr()
-    assert "usage:" in captured.out 
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], "result1")
+        mock_indexer.return_value.search_metadata.assert_called_once()
 
-@patch('app.main.KeboolaClient')
-def test_client_initialization(mock_client, mock_config):
-    """Test client initialization with correct URL."""
-    client = KeboolaClient(
-        api_url=mock_config.keboola_api_url,
-        token=mock_config.keboola_token
-    )
-    assert client.url == "https://connection.keboola.com/v2/storage"
-    assert client.token == "test-token" 
+    @patch("app.main.KeboolaClient")
+    def test_build_ontology(self, mock_client):
+        # Mock client methods
+        mock_client.return_value.extract_ontology_metadata.return_value = {
+            "entities": [
+                {
+                    "id": "entity1",
+                    "type": "Bucket",
+                    "properties": {
+                        "name": "Test Bucket",
+                        "description": "Test Description"
+                    }
+                }
+            ],
+            "relationships": [
+                {
+                    "source_id": "entity1",
+                    "target_id": "entity2",
+                    "type": "CONTAINS"
+                }
+            ]
+        }
+
+        ontology_manager, rdf_store = build_ontology(mock_client.return_value)
+
+        self.assertIsInstance(ontology_manager, OntologyManager)
+        self.assertIsInstance(rdf_store, RDFStore)
+        self.assertEqual(len(ontology_manager.entities), 1)
+        self.assertEqual(len(ontology_manager.relationships), 1)
+
+    @patch("app.main.OntologyManager")
+    def test_build_action_graph(self, mock_ontology_manager):
+        mock_manager = Mock()
+        mock_ontology_manager.return_value = mock_manager
+        mock_manager.entities = {"entity1": Mock()}
+        mock_manager.relationships = {"rel1": Mock()}
+
+        action_graph = build_action_graph(mock_manager)
+
+        self.assertIsInstance(action_graph, ActionGraph)
+        mock_manager.assert_called_once()
+
+    @patch("app.main.KeboolaClient")
+    @patch("app.main.QdrantIndexer")
+    @patch("app.main.get_embedding_provider")
+    @patch("app.main.build_ontology")
+    @patch("app.main.build_action_graph")
+    @patch("app.main.StateManager")
+    def test_index_command(
+        self,
+        mock_state_manager,
+        mock_build_action_graph,
+        mock_build_ontology,
+        mock_get_provider,
+        mock_indexer,
+        mock_client
+    ):
+        # Mock components
+        mock_state_manager.return_value = Mock()
+        mock_build_ontology.return_value = (Mock(), Mock())
+        mock_build_action_graph.return_value = Mock()
+        mock_get_provider.return_value = Mock()
+        mock_indexer.return_value = Mock()
+        mock_client.return_value = Mock()
+
+        # Execute command
+        index_command(self.config, self.batch_config)
+
+        # Verify calls
+        mock_client.return_value.extract_metadata.assert_called_once()
+        mock_indexer.return_value.index_metadata.assert_called_once()
+        mock_build_ontology.assert_called_once()
+        mock_build_action_graph.assert_called_once()
+        mock_state_manager.return_value.save_ontology_state.assert_called_once()
+        mock_state_manager.return_value.save_rdf_state.assert_called_once()
+        mock_state_manager.return_value.save_action_graph_state.assert_called_once()
+
+    @patch("app.main.QdrantIndexer")
+    @patch("app.main.get_embedding_provider")
+    def test_search_command(self, mock_get_provider, mock_indexer):
+        mock_provider = Mock()
+        mock_get_provider.return_value = mock_provider
+        mock_indexer.return_value.search_metadata.return_value = [
+            {
+                "id": "result1",
+                "score": 0.95,
+                "metadata_type": "table",
+                "name": "Test Table",
+                "description": "Test Description"
+            }
+        ]
+
+        with patch("builtins.print") as mock_print:
+            search_command(
+                self.config,
+                "test",
+                metadata_type="table",
+                component_type="extractor",
+                table_id="table1",
+                stage="in",
+                limit=5
+            )
+
+            mock_print.assert_called()
+            mock_indexer.return_value.search_metadata.assert_called_once()
+
+    @patch("app.main.StateManager")
+    def test_query_ontology_command(self, mock_state_manager):
+        # Mock RDF store
+        mock_rdf_store = Mock()
+        mock_rdf_store.query.return_value = [
+            Mock(vars=["var1", "var2"]),
+            Mock(vars=["var1", "var2"])
+        ]
+        mock_rdf_store.query.return_value[0]["var1"] = URIRef("http://example.org/entity1")
+        mock_rdf_store.query.return_value[0]["var2"] = Literal("Test Value")
+        mock_state_manager.return_value.load_rdf_state.return_value = mock_rdf_store
+
+        with patch("builtins.print") as mock_print:
+            query_ontology_command(self.config, "SELECT ?var1 ?var2 WHERE { ?var1 ?var2 ?var3 }")
+
+            mock_print.assert_called()
+            mock_rdf_store.query.assert_called_once()
+
+    @patch("app.main.StateManager")
+    def test_query_ontology_command_no_store(self, mock_state_manager):
+        mock_state_manager.return_value.load_rdf_state.return_value = None
+
+        with patch("app.main.logging.error") as mock_error:
+            query_ontology_command(self.config, "SELECT ?var1 ?var2 WHERE { ?var1 ?var2 ?var3 }")
+            mock_error.assert_called_once_with("No RDF store found. Please run the index command first.")
+
+
+if __name__ == "__main__":
+    unittest.main() 

@@ -11,6 +11,9 @@ import json
 from typing import Dict, List, Any, Optional, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+from dataclasses import dataclass
+from enum import Enum
+import datetime
 
 from app.ontology.models import Entity, Relationship, Triple, EntityType, RelationshipType
 from app.ontology.manager import OntologyManager
@@ -23,10 +26,24 @@ from app.ontology.prompts import (
     get_entity_type_schema_prompt,
     get_relationship_type_schema_prompt
 )
-from app.llm_client import LLMClient
+from app.llm_client import LLMClient, LLMError, LLMResponseError
 
 logger = logging.getLogger(__name__)
 
+class ProcessingStatus(Enum):
+    """Status of processing an item."""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+@dataclass
+class ProcessingResult:
+    """Result of processing an item."""
+    status: ProcessingStatus
+    item: Any
+    result: Optional[Any] = None
+    error: Optional[Exception] = None
 
 class OntologyBuilder:
     """
@@ -66,51 +83,147 @@ class OntologyBuilder:
         # Cache for entity type and relationship type schema prompts
         self._entity_type_schema_prompt = None
         self._relationship_type_schema_prompt = None
+        
+        # Processing state
+        self._processing_results: Dict[str, ProcessingResult] = {}
+        self._failed_items: List[ProcessingResult] = []
     
-    def build_ontology(self, metadata_collection: List[Dict[str, Any]]) -> OntologyManager:
+    def _process_batch_with_retry(
+        self,
+        batch: List[Dict[str, Any]],
+        process_fn: callable,
+        batch_id: str
+    ) -> List[ProcessingResult]:
         """
-        Build an ontology from a collection of metadata items.
+        Process a batch of items with retries.
         
         Args:
-            metadata_collection: List of metadata items to process
+            batch: List of items to process
+            process_fn: Function to process each item
+            batch_id: Unique identifier for the batch
             
         Returns:
-            OntologyManager containing the constructed ontology
+            List of processing results
         """
-        logger.info(f"Building ontology from {len(metadata_collection)} metadata items")
+        results = []
+        retry_count = 0
         
-        # Extract entities from metadata
-        entities = self.extract_entities_batch(metadata_collection)
-        logger.info(f"Extracted {len(entities)} entities from metadata")
+        while retry_count < self.max_retries:
+            try:
+                batch_results = []
+                for item in batch:
+                    item_id = f"{batch_id}_{item.get('id', str(uuid.uuid4()))}"
+                    self._processing_results[item_id] = ProcessingResult(
+                        status=ProcessingStatus.PROCESSING,
+                        item=item
+                    )
+                    
+                    try:
+                        result = process_fn(item)
+                        self._processing_results[item_id].status = ProcessingStatus.COMPLETED
+                        self._processing_results[item_id].result = result
+                        batch_results.append(self._processing_results[item_id])
+                    except Exception as e:
+                        self._processing_results[item_id].status = ProcessingStatus.FAILED
+                        self._processing_results[item_id].error = e
+                        self._failed_items.append(self._processing_results[item_id])
+                        logger.error(f"Error processing item {item_id}: {e}")
+                
+                results.extend(batch_results)
+                return results
+                
+            except Exception as e:
+                retry_count += 1
+                if retry_count >= self.max_retries:
+                    logger.error(f"Batch {batch_id} failed after {self.max_retries} retries: {e}")
+                    # Mark all items in batch as failed
+                    for item in batch:
+                        item_id = f"{batch_id}_{item.get('id', str(uuid.uuid4()))}"
+                        self._processing_results[item_id].status = ProcessingStatus.FAILED
+                        self._processing_results[item_id].error = e
+                        self._failed_items.append(self._processing_results[item_id])
+                    return results
+                
+                logger.warning(f"Batch {batch_id} failed (attempt {retry_count}/{self.max_retries}): {e}")
+                time.sleep(self.retry_delay * (2 ** retry_count))  # Exponential backoff
         
-        # Add entities to the ontology manager
-        for entity in entities:
-            self.ontology_manager.add_entity(entity)
+        return results
+    
+    def _process_batches_parallel(
+        self,
+        items: List[Dict[str, Any]],
+        process_fn: callable
+    ) -> List[ProcessingResult]:
+        """
+        Process items in parallel batches.
         
-        # Detect relationships between entities
-        relationships = self.detect_relationships_batch(entities)
-        logger.info(f"Detected {len(relationships)} relationships between entities")
+        Args:
+            items: List of items to process
+            process_fn: Function to process each item
+            
+        Returns:
+            List of processing results
+        """
+        results = []
+        batches = self._create_batches(items)
         
-        # Add relationships to the ontology manager
-        for relationship in relationships:
-            self.ontology_manager.add_relationship(relationship)
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_batch = {
+                executor.submit(
+                    self._process_batch_with_retry,
+                    batch,
+                    process_fn,
+                    f"batch_{i}"
+                ): batch
+                for i, batch in enumerate(batches)
+            }
+            
+            for future in as_completed(future_to_batch):
+                batch = future_to_batch[future]
+                try:
+                    batch_results = future.result()
+                    results.extend(batch_results)
+                except Exception as e:
+                    logger.error(f"Error processing batch: {e}")
+                    # Mark all items in batch as failed
+                    for item in batch:
+                        item_id = f"batch_{items.index(item)}_{item.get('id', str(uuid.uuid4()))}"
+                        self._processing_results[item_id].status = ProcessingStatus.FAILED
+                        self._processing_results[item_id].error = e
+                        self._failed_items.append(self._processing_results[item_id])
         
-        # Build triples from entities and relationships
-        triples = self._build_triples_from_relationships(relationships)
-        logger.info(f"Built {len(triples)} triples from relationships")
+        return results
+    
+    def _create_batches(self, items: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        """
+        Create batches of items for processing.
         
-        # Add triples to the ontology manager
-        for triple in triples:
-            self.ontology_manager.add_triple(triple)
+        Args:
+            items: List of items to batch
+            
+        Returns:
+            List of batches
+        """
+        batches = []
+        current_batch = []
         
-        return self.ontology_manager
+        for item in items:
+            current_batch.append(item)
+            if len(current_batch) >= self.batch_size:
+                batches.append(current_batch)
+                current_batch = []
+        
+        if current_batch:
+            batches.append(current_batch)
+        
+        return batches
     
     def extract_entities(self, metadata: Dict[str, Any]) -> List[Entity]:
         """
-        Extract entities from a single metadata item using an LLM.
+        Extract entities from metadata using an LLM.
         
         Args:
-            metadata: Metadata item to extract entities from
+            metadata: Metadata to extract entities from
             
         Returns:
             List of extracted entities
@@ -127,82 +240,132 @@ class OntologyBuilder:
             schema_definitions=self._entity_type_schema_prompt
         )
         
-        # Call LLM with retries
-        json_response = self._call_llm_with_retry(
-            system_prompt=prompt["system_prompt"],
-            user_prompt=prompt["user_prompt"],
-            expected_format="json"
-        )
-        
-        # Parse and validate entities
-        entities = []
-        for entity_data in json_response:
-            try:
-                # Create entity
-                entity_type = EntityType(entity_data.get("type"))
-                entity_id = entity_data.get("id", str(uuid.uuid4()))
-                properties = entity_data.get("properties", {})
-                
-                entity = Entity(
-                    id=entity_id,
-                    type=entity_type,
-                    properties=properties
-                )
-                
-                # Validate entity
-                is_valid, errors = self.schema_validator.validate_entity(entity)
-                if not is_valid:
-                    logger.warning(f"Invalid entity extracted: {entity_id}, errors: {errors}")
-                    continue
-                
-                entities.append(entity)
-            except Exception as e:
-                logger.error(f"Error creating entity from LLM response: {e}")
-                continue
-        
-        return entities
-    
-    def extract_entities_batch(self, metadata_collection: List[Dict[str, Any]]) -> List[Entity]:
-        """
-        Extract entities from a batch of metadata items in parallel.
-        
-        Args:
-            metadata_collection: List of metadata items to extract entities from
+        try:
+            # Call LLM with retries
+            response = self._call_llm_with_retry(
+                system_prompt=prompt["system_prompt"],
+                user_prompt=prompt["user_prompt"],
+                expected_format="json"
+            )
             
-        Returns:
-            List of all extracted entities
-        """
-        all_entities = []
-        
-        # Process metadata items in batches
-        batches = [
-            metadata_collection[i:i + self.batch_size]
-            for i in range(0, len(metadata_collection), self.batch_size)
-        ]
-        
-        for batch_idx, batch in enumerate(batches):
-            logger.info(f"Processing batch {batch_idx + 1}/{len(batches)}")
+            # Parse and validate entities
+            entities = []
             
-            batch_entities = []
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                # Submit extraction tasks
-                future_to_metadata = {
-                    executor.submit(self.extract_entities, metadata): metadata
-                    for metadata in batch
-                }
+            # Handle different response types
+            if isinstance(response, str):
+                try:
+                    json_response = json.loads(response)
+                except:
+                    logger.error(f"Failed to parse JSON from response: {response[:100]}...")
+                    return entities
+            else:
+                json_response = response
                 
-                # Collect results
-                for future in as_completed(future_to_metadata):
-                    metadata = future_to_metadata[future]
+            # Check if response contains an 'entities' key (common pattern from LLMs)
+            if isinstance(json_response, dict) and 'entities' in json_response:
+                entities_data = json_response['entities']
+                if isinstance(entities_data, list):
+                    json_response = entities_data
+                else:
+                    logger.warning(f"Expected 'entities' to be a list, got {type(entities_data)}")
+                    # Try to continue with the original response
+            
+            # Ensure json_response is a list
+            if isinstance(json_response, dict):
+                json_response = [json_response]
+            elif not isinstance(json_response, list):
+                logger.error(f"Expected list or dict, got {type(json_response)}")
+                return entities
+            
+            for entity_data in json_response:
+                try:
+                    # Skip if not a dict
+                    if not isinstance(entity_data, dict):
+                        logger.warning(f"Entity data is not a dictionary: {entity_data}")
+                        continue
+                    
+                    # Get entity type
+                    type_value = entity_data.get("type")
+                    if not type_value:
+                        logger.warning(f"Entity missing type: {entity_data}")
+                        continue
+                    
+                    # Create entity type enum - handle case-insensitive matching
                     try:
-                        entities = future.result()
-                        batch_entities.extend(entities)
-                    except Exception as e:
-                        logger.error(f"Error extracting entities from metadata: {e}")
+                        # First try direct conversion
+                        try:
+                            entity_type = EntityType(type_value)
+                        except ValueError:
+                            # Try uppercase - the enum values are uppercase
+                            try:
+                                entity_type = EntityType(type_value.upper())
+                            except ValueError:
+                                # Try lowercase - sometimes the enum values are lowercase
+                                entity_type = EntityType(type_value.lower())
+                    except ValueError:
+                        logger.warning(f"Invalid entity type: {type_value}")
+                        continue
+                    
+                    # Get entity ID
+                    entity_id = entity_data.get("id")
+                    if not entity_id:
+                        entity_id = str(uuid.uuid4())
+                    
+                    # Get properties
+                    properties = entity_data.get("properties", {})
+                    if not isinstance(properties, dict):
+                        properties = {}
+                    
+                    # Ensure valid datetime format for date fields
+                    date_fields = ['created_at', 'updated_at', 'last_updated']
+                    for field in date_fields:
+                        if field in properties:
+                            # If empty string or invalid, set to current ISO datetime
+                            if not properties[field] or properties[field] == '':
+                                properties[field] = datetime.datetime.now().isoformat()
+                            # Try parsing to validate - if invalid, set to current time
+                            try:
+                                datetime.datetime.fromisoformat(properties[field])
+                            except (ValueError, TypeError):
+                                properties[field] = datetime.datetime.now().isoformat()
+                    
+                    # Get entity name (required parameter)
+                    entity_name = entity_data.get("name")
+                    if not entity_name:
+                        # Try to extract name from properties
+                        entity_name = properties.get("name", "")
+                        
+                    # If still no name, use id or a default name
+                    if not entity_name:
+                        entity_name = f"{entity_type.value}_{entity_id}"
+                    
+                    # Create entity
+                    entity = Entity(
+                        id=entity_id,
+                        type=entity_type,
+                        name=entity_name,
+                        properties=properties
+                    )
+                    
+                    # Validate entity
+                    is_valid, errors = self.schema_validator.validate_entity(entity)
+                    if not is_valid:
+                        logger.warning(f"Invalid entity extracted: {entity_id}, errors: {errors}")
+                        continue
+                    
+                    entities.append(entity)
+                except Exception as e:
+                    logger.error(f"Error creating entity from LLM response: {e}")
+                    continue
             
-            all_entities.extend(batch_entities)
-        
-        return all_entities
+            return entities
+            
+        except LLMError as e:
+            logger.error(f"LLM error during entity extraction: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during entity extraction: {e}")
+            raise
     
     def detect_relationships(self, entities: List[Entity]) -> List[Relationship]:
         """
@@ -214,6 +377,11 @@ class OntologyBuilder:
         Returns:
             List of detected relationships
         """
+        # Skip if no entities or only one entity (need at least two to form a relationship)
+        if not entities or len(entities) < 2:
+            logger.warning(f"Skipping relationship detection for {len(entities)} entities - need at least 2 entities")
+            return []
+            
         # Get schema prompt for relationship types if not cached
         if self._relationship_type_schema_prompt is None:
             self._relationship_type_schema_prompt = get_relationship_type_schema_prompt(
@@ -225,6 +393,7 @@ class OntologyBuilder:
             {
                 "id": entity.id,
                 "type": entity.type.value,
+                "name": entity.name,
                 "properties": entity.properties
             }
             for entity in entities
@@ -236,251 +405,169 @@ class OntologyBuilder:
             schema_definitions=self._relationship_type_schema_prompt
         )
         
-        # Call LLM with retries
-        json_response = self._call_llm_with_retry(
-            system_prompt=prompt["system_prompt"],
-            user_prompt=prompt["user_prompt"],
-            expected_format="json"
-        )
-        
-        # Parse and validate relationships
-        relationships = []
-        entities_dict = {entity.id: entity for entity in entities}
-        
-        for rel_data in json_response:
-            try:
-                # Create relationship
-                rel_type = RelationshipType(rel_data.get("type"))
-                rel_id = rel_data.get("id", str(uuid.uuid4()))
-                source_id = rel_data.get("source_id")
-                target_id = rel_data.get("target_id")
-                properties = rel_data.get("properties", {})
-                
-                # Skip if source or target entity doesn't exist
-                if source_id not in entities_dict or target_id not in entities_dict:
-                    logger.warning(f"Relationship {rel_id} references nonexistent entity")
-                    continue
-                
-                relationship = Relationship(
-                    id=rel_id,
-                    type=rel_type,
-                    source_id=source_id,
-                    target_id=target_id,
-                    properties=properties
-                )
-                
-                # Validate relationship
-                is_valid, errors = self.schema_validator.validate_relationship(
-                    relationship, entities_dict
-                )
-                if not is_valid:
-                    logger.warning(f"Invalid relationship detected: {rel_id}, errors: {errors}")
-                    continue
-                
-                relationships.append(relationship)
-            except Exception as e:
-                logger.error(f"Error creating relationship from LLM response: {e}")
-                continue
-        
-        return relationships
-    
-    def detect_relationships_batch(self, entities: List[Entity]) -> List[Relationship]:
-        """
-        Detect relationships between entities in batches to handle large entity sets.
-        
-        Args:
-            entities: List of all entities to detect relationships between
+        try:
+            # Log the entities being processed
+            logger.info(f"Detecting relationships between {len(entities)} entities")
+            entity_types = {entity.type.value: entity.type.value for entity in entities}
+            logger.info(f"Entity types present: {list(entity_types.keys())}")
             
-        Returns:
-            List of all detected relationships
-        """
-        all_relationships = []
-        entity_dict = {entity.id: entity for entity in entities}
-        
-        # Group entities by type for more efficient relationship detection
-        entities_by_type = self._group_entities_by_type(entities)
-        
-        # Create batches of entity pairs based on relationship type definitions
-        entity_batches = self._create_entity_batches_for_relationship_detection(entities_by_type)
-        
-        logger.info(f"Created {len(entity_batches)} batches for relationship detection")
-        
-        for batch_idx, batch in enumerate(entity_batches):
-            logger.info(f"Processing relationship batch {batch_idx + 1}/{len(entity_batches)}")
-            
-            try:
-                relationships = self.detect_relationships(batch)
-                
-                # Deduplicate relationships
-                all_relationships = self._deduplicate_relationships(all_relationships, relationships)
-                
-                logger.info(f"Detected {len(relationships)} relationships in batch {batch_idx + 1}")
-            except Exception as e:
-                logger.error(f"Error detecting relationships in batch {batch_idx + 1}: {e}")
-        
-        return all_relationships
-    
-    def update_ontology_from_metadata(self, metadata: Dict[str, Any]) -> List[Triple]:
-        """
-        Update the ontology with new metadata, extracting entities and relationships.
-        
-        Args:
-            metadata: New metadata to update the ontology with
-            
-        Returns:
-            List of new triples added to the ontology
-        """
-        # Extract entities from the new metadata
-        new_entities = self.extract_entities(metadata)
-        
-        # Add new entities to the ontology manager
-        for entity in new_entities:
-            self.ontology_manager.add_entity(entity)
-        
-        # Get all entities to detect relationships
-        all_entities = list(self.ontology_manager.get_all_entities().values())
-        
-        # Detect relationships between new entities and existing entities
-        entity_pairs = []
-        for new_entity in new_entities:
-            for existing_entity in all_entities:
-                if new_entity.id != existing_entity.id:
-                    entity_pairs.append([new_entity, existing_entity])
-        
-        # Detect relationships in batches
-        all_relationships = []
-        for i in range(0, len(entity_pairs), self.batch_size):
-            batch = entity_pairs[i:i + self.batch_size]
-            batch_entities = []
-            for pair in batch:
-                batch_entities.extend(pair)
-            
-            # Remove duplicates
-            batch_entities = list({entity.id: entity for entity in batch_entities}.values())
-            
-            relationships = self.detect_relationships(batch_entities)
-            all_relationships.extend(relationships)
-        
-        # Add new relationships to the ontology manager
-        new_triples = []
-        for relationship in all_relationships:
-            # Check if relationship already exists
-            if relationship.id not in self.ontology_manager.get_all_relationships():
-                self.ontology_manager.add_relationship(relationship)
-                
-                # Create and add triple
-                triple = Triple(
-                    subject=relationship.source_id,
-                    predicate=relationship.type.value,
-                    object=relationship.target_id,
-                    metadata=relationship.properties
-                )
-                
-                self.ontology_manager.add_triple(triple)
-                new_triples.append(triple)
-        
-        return new_triples
-    
-    def _build_triples_from_relationships(self, relationships: List[Relationship]) -> List[Triple]:
-        """
-        Build triples from relationships.
-        
-        Args:
-            relationships: List of relationships to build triples from
-            
-        Returns:
-            List of triples
-        """
-        triples = []
-        
-        for relationship in relationships:
-            triple = Triple(
-                subject=relationship.source_id,
-                predicate=relationship.type.value,
-                object=relationship.target_id,
-                metadata=relationship.properties
+            # Call LLM with retries
+            response = self._call_llm_with_retry(
+                system_prompt=prompt["system_prompt"],
+                user_prompt=prompt["user_prompt"],
+                expected_format="json"
             )
-            triples.append(triple)
-        
-        return triples
-    
-    def _group_entities_by_type(self, entities: List[Entity]) -> Dict[EntityType, List[Entity]]:
-        """
-        Group entities by type.
-        
-        Args:
-            entities: List of entities to group
             
-        Returns:
-            Dictionary mapping entity types to lists of entities
-        """
-        entities_by_type = {}
-        
-        for entity in entities:
-            if entity.type not in entities_by_type:
-                entities_by_type[entity.type] = []
-            entities_by_type[entity.type].append(entity)
-        
-        return entities_by_type
-    
-    def _create_entity_batches_for_relationship_detection(
-        self, entities_by_type: Dict[EntityType, List[Entity]]
-    ) -> List[List[Entity]]:
-        """
-        Create batches of entities for relationship detection based on the schema.
-        
-        This tries to group entities that are likely to have relationships with each other
-        based on the relationship type definitions in the schema.
-        
-        Args:
-            entities_by_type: Dictionary mapping entity types to lists of entities
+            # Parse and validate relationships
+            relationships = []
+            entities_dict = {entity.id: entity for entity in entities}
             
-        Returns:
-            List of entity batches
-        """
-        batches = []
-        processed_pairs = set()
-        
-        # Get allowed relationships for each entity type
-        for source_type, source_entities in entities_by_type.items():
-            allowed_relationships = self.schema_validator.schema.get_allowed_relationships(source_type)
+            # Log the raw response for debugging
+            logger.info(f"Raw LLM response: {response}")
             
-            for rel_type, target_types in allowed_relationships.items():
-                for target_type in target_types:
-                    # Skip if no entities of target type
-                    if target_type not in entities_by_type:
+            # Handle different response types
+            if isinstance(response, str):
+                try:
+                    json_response = json.loads(response)
+                except:
+                    logger.error(f"Failed to parse JSON from response: {response[:100]}...")
+                    return relationships
+            else:
+                json_response = response
+            
+            # Check if response contains a 'relationships' key (common pattern from LLMs)
+            if isinstance(json_response, dict) and 'relationships' in json_response:
+                relationships_data = json_response['relationships']
+                if isinstance(relationships_data, list):
+                    json_response = relationships_data
+                else:
+                    logger.warning(f"Expected 'relationships' to be a list, got {type(relationships_data)}")
+                    # Try to continue with the original response
+            
+            # Handle error messages in the response
+            if isinstance(json_response, dict) and any(key in json_response for key in ['error', 'errors', 'No relationships found']):
+                logger.warning(f"Response indicates no relationships or an error: {json_response}")
+                return relationships
+                
+            # Ensure json_response is a list
+            if isinstance(json_response, dict):
+                json_response = [json_response]
+            elif not isinstance(json_response, list):
+                logger.error(f"Expected list or dict, got {type(json_response)}")
+                return relationships
+            
+            # Skip empty responses
+            if not json_response or (len(json_response) == 1 and not json_response[0]):
+                logger.warning("Empty relationship response from LLM")
+                return relationships
+                
+            for rel_data in json_response:
+                try:
+                    # Skip if not a dict
+                    if not isinstance(rel_data, dict) or not rel_data:
+                        logger.warning(f"Relationship data is not a valid dictionary: {rel_data}")
                         continue
                     
-                    target_entities = entities_by_type[target_type]
-                    
-                    # Create a unique key for this source-target type pair
-                    pair_key = f"{source_type.value}-{rel_type.value}-{target_type.value}"
-                    if pair_key in processed_pairs:
+                    # Get relationship type
+                    type_value = rel_data.get("type")
+                    if not type_value:
+                        logger.warning(f"Relationship missing type: {rel_data}")
                         continue
-                    processed_pairs.add(pair_key)
                     
-                    # Create batches for this source-target type pair
-                    for i in range(0, len(source_entities), self.batch_size // 2):
-                        for j in range(0, len(target_entities), self.batch_size // 2):
-                            source_batch = source_entities[i:i + self.batch_size // 2]
-                            target_batch = target_entities[j:j + self.batch_size // 2]
-                            
-                            # Combine and deduplicate
-                            batch = source_batch + target_batch
-                            batch = list({entity.id: entity for entity in batch}.values())
-                            
-                            if len(batch) > 0:
-                                batches.append(batch)
-        
-        # If no batches were created, create batches with mixed entity types
-        if not batches:
-            all_entities = [entity for entities in entities_by_type.values() for entity in entities]
-            for i in range(0, len(all_entities), self.batch_size):
-                batch = all_entities[i:i + self.batch_size]
-                if batch:
-                    batches.append(batch)
-        
-        return batches
+                    # Create relationship type enum - case insensitive matching
+                    try:
+                        # Try direct conversion
+                        try:
+                            rel_type = RelationshipType(type_value)
+                        except ValueError:
+                            # Try converting to uppercase (enum values are uppercase)
+                            try:
+                                rel_type = RelationshipType(type_value.upper())
+                            except ValueError:
+                                # Try converting to lowercase and stripping spaces
+                                rel_type = RelationshipType(type_value.lower().replace(" ", ""))
+                    except ValueError:
+                        logger.warning(f"Invalid relationship type: '{type_value}'. Valid types are: {[t.value for t in RelationshipType]}. Full data: {rel_data}")
+                        continue
+                    
+                    # Get relationship ID
+                    rel_id = rel_data.get("id")
+                    if not rel_id:
+                        rel_id = str(uuid.uuid4())
+                    
+                    # Get source and target entities
+                    source_id = rel_data.get("source_id")
+                    target_id = rel_data.get("target_id")
+                    if not source_id or not target_id:
+                        logger.warning(f"Relationship missing source or target: {rel_data}")
+                        continue
+                    
+                    # Skip if source or target entity doesn't exist
+                    if source_id not in entities_dict:
+                        logger.warning(f"Relationship {rel_id} references nonexistent source entity: {source_id}. Available entity IDs: {list(entities_dict.keys())[:5]}...")
+                        continue
+                        
+                    if target_id not in entities_dict:
+                        logger.warning(f"Relationship {rel_id} references nonexistent target entity: {target_id}. Available entity IDs: {list(entities_dict.keys())[:5]}...")
+                        continue
+                    
+                    # Get properties
+                    properties = rel_data.get("properties", {})
+                    if not isinstance(properties, dict):
+                        properties = {}
+                    
+                    # Ensure valid datetime format for date fields
+                    date_fields = ['created_at', 'updated_at', 'last_updated']
+                    for field in date_fields:
+                        if field in properties:
+                            # If empty string or invalid, set to current ISO datetime
+                            if not properties[field] or properties[field] == '':
+                                properties[field] = datetime.datetime.now().isoformat()
+                            # Try parsing to validate - if invalid, set to current time
+                            try:
+                                datetime.datetime.fromisoformat(properties[field])
+                            except (ValueError, TypeError):
+                                properties[field] = datetime.datetime.now().isoformat()
+                    
+                    # Create relationship
+                    relationship = Relationship(
+                        id=rel_id,
+                        type=rel_type,
+                        source_id=source_id,
+                        target_id=target_id,
+                        properties=properties
+                    )
+                    
+                    # Validate relationship
+                    is_valid, errors = self.schema_validator.validate_relationship(
+                        relationship, entities_dict
+                    )
+                    if not is_valid:
+                        source_type = entities_dict[source_id].type if source_id in entities_dict else "unknown"
+                        target_type = entities_dict[target_id].type if target_id in entities_dict else "unknown"
+                        logger.warning(f"Invalid relationship: {rel_type.value} from {source_type} to {target_type}. Errors: {errors}. Raw data: {rel_data}")
+                        continue
+                    
+                    # Log valid relationship
+                    logger.info(f"Created valid relationship: {rel_id}, Type: {rel_type.value}, Source: {source_id}, Target: {target_id}")
+                    relationships.append(relationship)
+                except Exception as e:
+                    logger.error(f"Error creating relationship from LLM response: {e}, data: {rel_data}")
+                    continue
+            
+            if not relationships and json_response:
+                logger.warning(f"No valid relationships were found from non-empty response. Raw response: {json_response}")
+            else:
+                logger.info(f"Detected {len(relationships)} valid relationships")
+            
+            return relationships
+            
+        except LLMError as e:
+            logger.error(f"LLM error during relationship detection: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during relationship detection: {e}")
+            raise
     
     def _call_llm_with_retry(
         self, system_prompt: str, user_prompt: str, expected_format: str = "json"
@@ -497,65 +584,201 @@ class OntologyBuilder:
             Parsed response from the LLM
             
         Raises:
-            Exception: If all retries fail
+            LLMError: If all retries fail
         """
         last_error = None
         
         for attempt in range(self.max_retries):
             try:
+                # Add explicit JSON formatting instruction to user prompt for better results
+                enhanced_user_prompt = user_prompt
+                if expected_format == "json":
+                    enhanced_user_prompt = user_prompt + "\n\nPlease respond with a valid JSON array or object only, without any explanation or additional text."
+                
+                # Log prompt details for debugging
+                logger.debug(f"LLM Call - System prompt first 100 chars: {system_prompt[:100]}...")
+                logger.debug(f"LLM Call - User prompt first 100 chars: {enhanced_user_prompt[:100]}...")
+                
                 response = self.llm_client.generate(
+                    prompt=enhanced_user_prompt,
                     system_prompt=system_prompt,
-                    user_prompt=user_prompt,
                     expected_format=expected_format
                 )
                 
+                # Log raw response for debugging
+                if isinstance(response, str):
+                    logger.debug(f"LLM raw response first 100 chars: {response[:100]}...")
+                else:
+                    logger.debug(f"LLM parsed response type: {type(response)}")
+                
                 if expected_format == "json":
-                    # Ensure the response is valid JSON
+                    # Parse JSON response
                     if isinstance(response, str):
                         try:
-                            response = json.loads(response)
+                            # First try parsing the entire response as JSON
+                            parsed_response = json.loads(response)
+                            return parsed_response
                         except json.JSONDecodeError:
-                            # If the response contains a JSON array, try to extract it
+                            # Try extracting JSON using regex patterns
                             import re
-                            json_match = re.search(r'\[.*\]', response, re.DOTALL)
-                            if json_match:
-                                response = json.loads(json_match.group())
-                            else:
-                                raise ValueError("Invalid JSON response")
+                            
+                            # Look for JSON arrays
+                            json_array_match = re.search(r'\[(.*?)\]', response, re.DOTALL)
+                            if json_array_match:
+                                try:
+                                    array_text = json_array_match.group(0)
+                                    parsed_response = json.loads(array_text)
+                                    return parsed_response
+                                except json.JSONDecodeError:
+                                    pass
+                            
+                            # Look for JSON objects
+                            json_obj_match = re.search(r'\{(.*?)\}', response, re.DOTALL)
+                            if json_obj_match:
+                                try:
+                                    obj_text = json_obj_match.group(0)
+                                    parsed_response = json.loads(obj_text)
+                                    return parsed_response
+                                except json.JSONDecodeError:
+                                    pass
+                            
+                            # Look for code blocks that might contain JSON
+                            code_block_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', response, re.DOTALL)
+                            if code_block_match:
+                                try:
+                                    code_text = code_block_match.group(1).strip()
+                                    parsed_response = json.loads(code_text)
+                                    return parsed_response
+                                except json.JSONDecodeError:
+                                    pass
+                            
+                            # If we can't parse JSON, create a simple array with the content
+                            logger.warning(f"Failed to parse JSON from response: {response[:100]}...")
+                            return [{"raw_response": response}]
+                    else:
+                        # Response is already parsed as a Python object
+                        return response
+                else:
+                    # Return text response as is
+                    return response
                 
-                return response
             except Exception as e:
                 last_error = e
                 logger.warning(f"LLM call failed (attempt {attempt + 1}/{self.max_retries}): {e}")
                 time.sleep(self.retry_delay * (attempt + 1))  # Exponential backoff
         
-        raise Exception(f"All LLM call attempts failed: {last_error}")
+        raise LLMError(f"All LLM call attempts failed: {last_error}")
     
-    def _deduplicate_relationships(
-        self, existing_relationships: List[Relationship], new_relationships: List[Relationship]
-    ) -> List[Relationship]:
+    def build_ontology(self, metadata_list: List[Dict[str, Any]]) -> None:
         """
-        Deduplicate relationships by removing duplicates from the new relationships.
+        Build an ontology from a list of metadata items.
         
         Args:
-            existing_relationships: List of existing relationships
-            new_relationships: List of new relationships to deduplicate
-            
-        Returns:
-            List of deduplicated relationships
+            metadata_list: List of metadata items to build ontology from
         """
-        # Create a set of existing relationship keys
-        existing_keys = {
-            (rel.type, rel.source_id, rel.target_id)
-            for rel in existing_relationships
-        }
+        logger.info(f"Building ontology from {len(metadata_list)} metadata items")
         
-        # Filter out duplicates from new relationships
-        deduplicated = []
-        for rel in new_relationships:
-            key = (rel.type, rel.source_id, rel.target_id)
-            if key not in existing_keys:
-                deduplicated.append(rel)
-                existing_keys.add(key)
+        # Process metadata items in parallel batches
+        results = self._process_batches_parallel(
+            metadata_list,
+            self._process_metadata_item
+        )
         
-        return existing_relationships + deduplicated 
+        # Log processing results
+        completed = [r for r in results if r.status == ProcessingStatus.COMPLETED]
+        failed = [r for r in results if r.status == ProcessingStatus.FAILED]
+        
+        logger.info(f"Completed processing {len(completed)} items")
+        if failed:
+            logger.warning(f"Failed to process {len(failed)} items")
+            for result in failed:
+                logger.error(f"Failed item: {result.item}, Error: {result.error}")
+    
+    def _process_metadata_item(self, metadata: Dict[str, Any]) -> None:
+        """
+        Process a single metadata item.
+        
+        Args:
+            metadata: Metadata item to process
+        """
+        try:
+            # Extract entities
+            logger.info(f"Extracting entities from metadata type: {metadata.get('type', 'unknown')}")
+            entities = self.extract_entities(metadata)
+            
+            # Add entities to ontology manager
+            for entity in entities:
+                self.ontology_manager.add_entity(entity)
+                
+            # Log entity extraction results
+            logger.info(f"Extracted {len(entities)} entities from metadata item")
+            
+            # Process relationships in smaller batches to avoid overwhelming the LLM
+            if len(entities) > 5:
+                logger.info(f"Processing relationships in batches for {len(entities)} entities")
+                
+                # Group entities by type for more relevant relationship detection
+                entity_groups = {}
+                for entity in entities:
+                    entity_type = entity.type.value
+                    if entity_type not in entity_groups:
+                        entity_groups[entity_type] = []
+                    entity_groups[entity_type].append(entity)
+                
+                # Process relationships between entities of the same type first
+                for entity_type, group in entity_groups.items():
+                    if len(group) >= 2:
+                        batch_size = min(10, len(group))
+                        for i in range(0, len(group), batch_size):
+                            batch = group[i:i+batch_size]
+                            logger.info(f"Processing relationship batch of {len(batch)} entities of type {entity_type}")
+                            relationships = self.detect_relationships(batch)
+                            
+                            # Add relationships to ontology manager
+                            for relationship in relationships:
+                                self.ontology_manager.add_relationship(relationship)
+                
+                # Process relationships between different types of entities
+                # Create key pairs for related entity types
+                related_type_pairs = [
+                    (EntityType.BUCKET, EntityType.TABLE),
+                    (EntityType.TABLE, EntityType.COLUMN),
+                    (EntityType.COMPONENT, EntityType.CONFIGURATION),
+                    (EntityType.TRANSFORMATION, EntityType.BLOCK),
+                    (EntityType.ORCHESTRATION, EntityType.TASK)
+                ]
+                
+                for type1, type2 in related_type_pairs:
+                    group1 = entity_groups.get(type1.value, [])
+                    group2 = entity_groups.get(type2.value, [])
+                    
+                    if group1 and group2:
+                        # Process in mini-batches to avoid overwhelming the LLM
+                        batch_size1 = min(5, len(group1))
+                        batch_size2 = min(5, len(group2))
+                        
+                        for i in range(0, len(group1), batch_size1):
+                            batch1 = group1[i:i+batch_size1]
+                            
+                            for j in range(0, len(group2), batch_size2):
+                                batch2 = group2[j:j+batch_size2]
+                                combined_batch = batch1 + batch2
+                                
+                                logger.info(f"Processing relationship batch between {len(batch1)} {type1.value} entities and {len(batch2)} {type2.value} entities")
+                                relationships = self.detect_relationships(combined_batch)
+                                
+                                # Add relationships to ontology manager
+                                for relationship in relationships:
+                                    self.ontology_manager.add_relationship(relationship)
+            else:
+                # For small entity sets, process all at once
+                logger.info(f"Processing relationships for {len(entities)} entities at once")
+                relationships = self.detect_relationships(entities)
+                
+                # Add relationships to ontology manager
+                for relationship in relationships:
+                    self.ontology_manager.add_relationship(relationship)
+                
+        except Exception as e:
+            logger.error(f"Error processing metadata item: {e}")
+            raise 

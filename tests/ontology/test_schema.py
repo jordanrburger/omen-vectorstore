@@ -26,8 +26,9 @@ class TestPropertyDefinition(unittest.TestCase):
         self.assertTrue(prop_def.validate("Test"))
         
         # Invalid pattern
-        self.assertFalse(prop_def.validate("test"))
-        self.assertFalse(prop_def.validate("TEST"))
+        result, message = prop_def.validate("test")
+        self.assertFalse(result)
+        self.assertEqual(message, "Property 'test_string' must match pattern ^[A-Z][a-z]+$")
         
         # Wrong type
         self.assertFalse(prop_def.validate(123))
@@ -47,9 +48,15 @@ class TestPropertyDefinition(unittest.TestCase):
         # Valid integer
         self.assertTrue(prop_def.validate(50))
         
+        # Invalid type
+        result, message = prop_def.validate("50")
+        self.assertFalse(result)
+        self.assertEqual(message, "Property 'test_integer' must be an integer")
+        
         # Out of range
-        self.assertFalse(prop_def.validate(-10))
-        self.assertFalse(prop_def.validate(200))
+        result, message = prop_def.validate(-1)
+        self.assertFalse(result)
+        self.assertEqual(message, "Property 'test_integer' must be >= 0")
         
         # Wrong type
         self.assertFalse(prop_def.validate("50"))
@@ -72,9 +79,15 @@ class TestPropertyDefinition(unittest.TestCase):
         # Integer should be converted to float
         self.assertTrue(prop_def.validate(1))
         
+        # Invalid type
+        result, message = prop_def.validate("0.5")
+        self.assertFalse(result)
+        self.assertEqual(message, "Property 'test_float' must be a float")
+        
         # Out of range
-        self.assertFalse(prop_def.validate(-0.5))
-        self.assertFalse(prop_def.validate(1.5))
+        result, message = prop_def.validate(-0.1)
+        self.assertFalse(result)
+        self.assertEqual(message, "Property 'test_float' must be >= 0.0")
         
         # Wrong type
         self.assertFalse(prop_def.validate("0.5"))
@@ -91,6 +104,11 @@ class TestPropertyDefinition(unittest.TestCase):
         # Valid boolean
         self.assertTrue(prop_def.validate(True))
         self.assertTrue(prop_def.validate(False))
+        
+        # Invalid type
+        result, message = prop_def.validate("true")
+        self.assertFalse(result)
+        self.assertEqual(message, "Property 'test_boolean' must be a boolean")
         
         # Wrong type
         self.assertFalse(prop_def.validate("True"))
@@ -111,6 +129,11 @@ class TestPropertyDefinition(unittest.TestCase):
         # String date should be converted
         self.assertTrue(prop_def.validate("2023-01-01"))
         
+        # Invalid format
+        result, message = prop_def.validate("24/03/2024")
+        self.assertFalse(result)
+        self.assertEqual(message, "Property 'test_date' must be a string in ISO format")
+        
         # Wrong type
         self.assertFalse(prop_def.validate(2023))
         self.assertFalse(prop_def.validate("invalid date"))
@@ -130,6 +153,14 @@ class TestPropertyDefinition(unittest.TestCase):
         # String datetime should be converted
         self.assertTrue(prop_def.validate("2023-01-01T12:00:00"))
         
+        # Valid datetime string
+        self.assertTrue(prop_def.validate("2024-03-24T12:00:00Z"))
+        
+        # Invalid format
+        result, message = prop_def.validate("2024-03-24")
+        self.assertFalse(result)
+        self.assertEqual(message, "Property 'test_datetime' must be a string in ISO format")
+        
         # Wrong type
         self.assertFalse(prop_def.validate(2023))
         self.assertFalse(prop_def.validate("invalid datetime"))
@@ -144,7 +175,9 @@ class TestPropertyDefinition(unittest.TestCase):
         )
         
         # None value for required property
-        self.assertFalse(prop_def.validate(None))
+        result, message = prop_def.validate(None)
+        self.assertFalse(result)
+        self.assertEqual(message, "Property 'test_required' is required")
         
         # Empty string for required property
         self.assertFalse(prop_def.validate(""))
@@ -180,6 +213,24 @@ class TestPropertyDefinition(unittest.TestCase):
         # Provided value should override default
         self.assertEqual(prop_def.get_value("provided value"), "provided value")
 
+    def test_enum_validation(self):
+        """Test validation of enum properties."""
+        prop_def = PropertyDefinition(
+            name="test_enum",
+            description="A test enum property",
+            data_type="string",
+            required=True,
+            enum_values=["A", "B", "C"]
+        )
+
+        # Valid enum value
+        self.assertTrue(prop_def.validate("A"))
+
+        # Invalid enum value
+        result, message = prop_def.validate("D")
+        self.assertFalse(result)
+        self.assertEqual(message, "Property 'test_enum' must be one of ['A', 'B', 'C']")
+
 
 class TestEntityTypeDefinition(unittest.TestCase):
     """Test cases for the EntityTypeDefinition class."""
@@ -211,6 +262,7 @@ class TestEntityTypeDefinition(unittest.TestCase):
         
         # Create entity type definition
         self.entity_type_def = EntityTypeDefinition(
+            type=EntityType.TABLE,
             name="TestEntity",
             description="A test entity type",
             properties={
@@ -281,6 +333,7 @@ class TestRelationshipTypeDefinition(unittest.TestCase):
         """Set up test fixtures."""
         # Create a relationship type definition
         self.relationship_type_def = RelationshipTypeDefinition(
+            type=RelationshipType.CONTAINS,
             name="Contains",
             description="Represents a containment relationship",
             source_types=[EntityType.BUCKET],
@@ -401,6 +454,7 @@ class TestSchemaValidator(unittest.TestCase):
         
         # Create entity type definitions
         project_def = EntityTypeDefinition(
+            type=EntityType.PROJECT,
             name="Project",
             description="A Keboola project",
             properties={"name": name_prop, "description": description_prop},
@@ -408,6 +462,7 @@ class TestSchemaValidator(unittest.TestCase):
         )
         
         bucket_def = EntityTypeDefinition(
+            type=EntityType.BUCKET,
             name="Bucket",
             description="A storage bucket in Keboola",
             properties={"name": name_prop, "description": description_prop},
@@ -416,13 +471,12 @@ class TestSchemaValidator(unittest.TestCase):
         
         # Create relationship type definitions
         contains_def = RelationshipTypeDefinition(
+            type=RelationshipType.CONTAINS,
             name="Contains",
             description="Represents a containment relationship",
             source_types=[EntityType.PROJECT],
             target_types=[EntityType.BUCKET],
-            cardinality="one-to-many",
-            properties={},
-            required_properties=[]
+            cardinality="one-to-many"
         )
         
         # Create mock schema

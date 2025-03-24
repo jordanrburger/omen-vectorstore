@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from app.vectorizer import EmbeddingProvider
 from app.batch_processor import BatchProcessor, BatchConfig
+from app.config import Config
 
 
 class QdrantIndexer:
@@ -20,11 +21,19 @@ class QdrantIndexer:
         self,
         collection_name: str = "keboola_metadata",
         batch_config: Optional[BatchConfig] = None,
+        config: Optional[Config] = None,
     ):
         """Initialize QdrantIndexer with collection name and batch configuration."""
         self.collection_name = collection_name
         self.vector_size = 1536  # OpenAI ada-002 embedding size
-        self.client = QdrantClient("localhost", port=6333)
+        self.config = config or Config.from_env()
+        self.client = QdrantClient(
+            host=self.config.qdrant_host,
+            port=self.config.qdrant_port,
+            api_key=self.config.qdrant_api_key,
+            prefer_grpc=False,
+            https=False  # Disable HTTPS for local connections
+        )
         self.batch_processor = BatchProcessor(batch_config or BatchConfig())
         self.ensure_collection()
 
@@ -505,7 +514,7 @@ class QdrantIndexer:
         if component_type:
             must_conditions.append(
                 models.FieldCondition(
-                    key="metadata.component.type",
+                    key="raw_metadata.component.type",
                     match=models.MatchValue(value=component_type)
                 )
             )
@@ -513,7 +522,7 @@ class QdrantIndexer:
         if table_id:
             must_conditions.append(
                 models.FieldCondition(
-                    key="table_id" if metadata_type == "columns" else "metadata.id",
+                    key="table_id" if metadata_type == "columns" else "raw_metadata.id",
                     match=models.MatchValue(value=table_id)
                 )
             )
@@ -521,7 +530,7 @@ class QdrantIndexer:
         if stage:
             must_conditions.append(
                 models.FieldCondition(
-                    key="metadata.stage",
+                    key="raw_metadata.stage",
                     match=models.MatchValue(value=stage)
                 )
             )
@@ -537,23 +546,37 @@ class QdrantIndexer:
         search_results = self.client.search(
             collection_name=self.collection_name,
             query_vector=query_embedding,
-            limit=limit,
-            query_filter=search_filter
+            query_filter=search_filter,
+            limit=limit
         )
 
         # Format results
         results = []
         for hit in search_results:
+            # Get the raw metadata from the payload
+            metadata = hit.payload.get("raw_metadata", {})
             result = {
                 "score": hit.score,
-                "metadata_type": hit.payload.get("metadata_type"),
-                "metadata": hit.payload.get("raw_metadata", {}),
+                "metadata_type": hit.payload.get("metadata_type", "unknown"),
+                "id": metadata.get("id", ""),
+                "name": metadata.get("name", ""),
+                "description": metadata.get("description", ""),
             }
+            
+            # Add component info if available
+            if "component" in metadata:
+                result["component"] = {
+                    "id": metadata["component"].get("id", ""),
+                    "type": metadata["component"].get("type", ""),
+                    "name": metadata["component"].get("name", "")
+                }
+            
             # Add additional metadata if present
             if "transformation_id" in hit.payload:
                 result["transformation_id"] = hit.payload["transformation_id"]
             if "table_id" in hit.payload:
                 result["table_id"] = hit.payload["table_id"]
+                
             results.append(result)
 
         return results

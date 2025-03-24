@@ -1,338 +1,209 @@
-# Omen Vectorstore - Metadata Ingestion & Recommendation System
+# Keboola Vector Store
 
-This project indexes metadata from a Keboola project using the Keboola Storage API and ingests it into a local Qdrant vector database. The goal is to expose a rich ecosystem of metadata for fast, semantically rich search and recommendation capabilities for AI-driven applications.
+A powerful vector store and ontology system for Keboola metadata, enabling semantic search and knowledge graph capabilities.
 
-## Overview
+## Features
 
-The system performs the following steps:
+- **Vector Store**
+  - Semantic search using embeddings
+  - Support for multiple embedding providers (OpenAI, SentenceTransformer)
+  - Batch processing and incremental updates
+  - Efficient similarity search with Qdrant
 
-1. **Metadata Extraction**
-   - Fetch buckets, tables, and table details from Keboola using the [Keboola SAPI Python Client](https://github.com/keboola/sapi-python-client).
-   - Extract column metadata including statistics and quality metrics.
-   - Extract transformation metadata including code blocks and dependencies.
+- **Ontology System**
+  - LLM-powered entity extraction from metadata
+  - Relationship detection between entities
+  - SPARQL query support
+  - Schema validation and compliance
+  - Parallel batch processing with retries
+
+- **Hybrid Search**
+  - Combine vector-based semantic search with ontology-based structured search
+  - Rich context in search results
+  - Filtering by metadata type and relationships
+
+## Architecture
+
+The system follows a four-step architecture:
+
+1. **Metadata Extraction** (using Keboola SAPI)
+   - Extract comprehensive metadata from Keboola
+   - Include bucket information, table details, and column statistics
+   - Capture quality metrics and transformation code
 
 2. **Metadata Processing and Vectorization**
-   - Normalize and combine metadata fields (e.g., title, description, tags) into documents.
-   - Convert documents into embeddings using OpenAI's text-embedding-ada-002 model.
-   - Process transformation code blocks to extract key operations and dependencies.
+   - Process metadata into normalized documents
+   - Generate embeddings using configured providers
+   - Extract entities and relationships for ontology
 
-3. **Indexing into Qdrant**
-   - Connect to a locally running Qdrant instance (dashboard: [http://localhost:55000/dashboard](http://localhost:55000/dashboard)).
-   - Store and index embeddings along with metadata for fast nearest-neighbor search.
-   - Optimized batch processing with automatic retries and storage management.
+3. **Indexing**
+   - Store embeddings in Qdrant vector store
+   - Build and maintain ontology knowledge graph
+   - Support incremental updates
 
 4. **Search and Recommendation API**
-   - Provide semantic search capabilities for finding relevant metadata.
-   - Support filtering by metadata type (buckets, tables, configurations, etc.).
-   - Return semantically similar results ranked by relevance score.
+   - Provide unified search interface
+   - Support both semantic and structured queries
+   - Enable hybrid search capabilities
 
-## Quick Start Guide
+## Installation
 
-Follow these steps to get up and running quickly:
-
-1. **Clone the Repository**:
-   ```bash
-   git clone https://github.com/your-username/omen-vectorstore.git
-   cd omen-vectorstore
-   ```
-
-2. **Set Up Qdrant**:
-   ```bash
-   # Create data directory
-   mkdir -p qdrant_data
-   
-   # Start Qdrant
-   docker-compose up -d qdrant
-   
-   # Verify it's running
-   curl http://localhost:55000/dashboard
-   ```
-
-3. **Install Dependencies**:
-   ```bash
-   # Install all required packages
-   pip3 install -r requirements.txt
-   ```
-
-4. **Configure Environment**:
-   ```bash
-   # Copy template
-   cp .env.template .env
-   
-   # Edit .env with your credentials
-   # Required:
-   KEBOOLA_TOKEN=your-keboola-storage-api-token
-   KEBOOLA_API_URL=https://connection.keboola.com
-   OPENAI_API_KEY=your-openai-api-key
-   ```
-
-5. **Extract and Index Metadata**:
-   ```bash
-   # Extract and index with default settings
-   python3 -m app.main index
-
-   # Extract and index with custom batch processing settings
-   python3 -m app.main index \
-     --batch-size 20 \      # Number of items to process in each batch (default: 10)
-     --max-retries 5 \      # Maximum retry attempts for failed operations (default: 3)
-     --retry-delay 2.0      # Initial delay between retries in seconds (default: 1.0)
-   ```
-
-6. **Run Your First Search**:
-   ```bash
-   # Basic search with default settings
-   python3 -m app.main search "Find tables containing Zendesk ticket data"
-
-   # Search with type filtering and custom limit
-   python3 -m app.main search "Find transformations that clean data" \
-     --type transformations \
-     --limit 5
-   ```
-
-## CLI Usage
-
-The application provides a command-line interface with two main commands:
-
-### Index Command
+1. Clone the repository:
 ```bash
-python3 -m app.main index [options]
+git clone https://github.com/keboola/omen-vectorstore.git
+cd omen-vectorstore
 ```
 
-Options:
-- `--batch-size`: Number of items to process in each batch (default: 10)
-- `--max-retries`: Maximum number of retry attempts for failed operations (default: 3)
-- `--retry-delay`: Initial delay between retries in seconds (default: 1.0)
-
-The indexing process includes:
-- Extracting metadata from Keboola Storage API
-- Converting metadata to embeddings
-- Storing in Qdrant with optimized batch processing
-- Automatic retries for failed operations
-
-### Search Command
+2. Install dependencies:
 ```bash
-python3 -m app.main search <query> [options]
+pip3 install -r requirements.txt
 ```
 
-Options:
-- `--type`: Filter by metadata type (buckets, tables, configurations)
-- `--limit`: Maximum number of results to return (default: 10)
+3. Set up environment variables:
+```bash
+cp .env.example .env
+# Edit .env with your configuration
+```
 
-Search results include:
-- Relevance score
-- Metadata type
-- ID and name
-- Description (if available)
-- Additional type-specific metadata
+## Usage
 
-## Advanced Usage
+### Vector Store
 
-### Search Operations
+```python
+from app.vector_store import VectorStore
+from app.llm_client import LLMClient
 
-The system supports various types of semantic searches with advanced filtering:
+# Initialize components
+vector_store = VectorStore()
+llm_client = LLMClient(
+    provider="openai",
+    model="gpt-4",
+    api_key="your-api-key"
+)
 
-1. **General Metadata Search**:
-   ```bash
-   # Search across all metadata types
-   python3 -m app.main search "Show me data related to Slack messages"
-   ```
+# Index metadata
+vector_store.index_metadata(metadata_list)
 
-2. **Type-Specific Search**:
-   ```bash
-   # Search only tables
-   python3 -m app.main search "Find tables with customer data" --type tables
+# Search
+results = vector_store.search(
+    query="Find tables related to customer support",
+    limit=10
+)
+```
 
-   # Search only configurations
-   python3 -m app.main search "Find transformations that process Zendesk data" --type configurations
-   ```
+### Ontology System
 
-3. **Component Type Filtering**:
-   ```bash
-   # Search for extractor configurations
-   python3 -m app.main search "Find Google Analytics data" --type configurations --component-type extractor
+```python
+from app.ontology.builder import OntologyBuilder
+from app.ontology.manager import OntologyManager
 
-   # Search for writer configurations
-   python3 -m app.main search "Find Snowflake writers" --type configurations --component-type writer
-   ```
+# Initialize components
+ontology_manager = OntologyManager()
+builder = OntologyBuilder(llm_client, ontology_manager)
 
-4. **Table-Specific Search**:
-   ```bash
-   # Search for columns in a specific table
-   python3 -m app.main search "Find email columns" --table-id in.c-main.customers
+# Build ontology
+builder.build_ontology(metadata_list)
 
-   # Search for transformations using a specific table
-   python3 -m app.main search "Find transformations" --type configurations --table-id in.c-main.customers
-   ```
+# Query ontology
+results = ontology_manager.query("""
+    SELECT ?table ?column
+    WHERE {
+        ?table a :Table ;
+              :hasColumn ?column .
+        ?column :type "string" .
+    }
+""")
+```
 
-5. **Stage Filtering**:
-   ```bash
-   # Search input stage tables
-   python3 -m app.main search "Find raw data tables" --type tables --stage in
+### Hybrid Search
 
-   # Search output stage tables
-   python3 -m app.main search "Find processed data" --type tables --stage out
-   ```
+```python
+from app.search import HybridSearch
 
-6. **Combined Filtering**:
-   ```bash
-   # Complex search with multiple filters
-   python3 -m app.main search "Find email validation" \
-     --type configurations \
-     --component-type processor \
-     --table-id in.c-main.customers \
-     --limit 5
-   ```
+# Initialize hybrid search
+search = HybridSearch(ontology_manager, vector_store)
 
-### Understanding Search Results
+# Perform hybrid search
+results = search.search(
+    query="Find tables related to customer support",
+    limit=10,
+    use_ontology=True,
+    use_vector=True
+)
+```
 
-Search results include rich metadata based on the type:
+## Configuration
 
-1. **Table Results**:
-   - Table ID and name
-   - Description (if available)
-   - Bucket information
-   - Stage (in/out)
+### Vector Store Settings
 
-2. **Configuration Results**:
-   - Configuration ID and name
-   - Component details
-   - Description
-   - Version information
-   - Creation and modification timestamps
+```python
+vector_store = VectorStore(
+    collection_name="keboola_metadata",
+    embedding_dimension=1536,
+    batch_size=100,
+    max_retries=3
+)
+```
 
-3. **Bucket Results**:
-   - Bucket ID and name
-   - Stage information
-   - Description (if available)
+### Ontology Settings
 
-### Batch Processing
+```python
+builder = OntologyBuilder(
+    llm_client=llm_client,
+    ontology_manager=ontology_manager,
+    batch_size=10,
+    max_workers=4,
+    max_retries=3
+)
+```
 
-The system supports optimized batch processing with configurable parameters:
+### LLM Settings
 
-1. **Batch Size**:
-   - Controls the number of items processed in each batch
-   - Default: 10 items
-   - Adjust based on available memory and API rate limits
-   ```bash
-   python3 -m app.main index --batch-size 20
-   ```
-
-2. **Retry Mechanism**:
-   - Automatic retries for failed operations
-   - Exponential backoff strategy
-   - Configurable maximum retries and initial delay
-   ```bash
-   python3 -m app.main index --max-retries 5 --retry-delay 2.0
-   ```
-
-3. **State Management**:
-   - Tracks processed items
-   - Supports incremental updates
-   - Maintains processing state across runs
+```python
+llm_client = LLMClient(
+    provider="openai",
+    model="gpt-4",
+    api_key="your-api-key",
+    temperature=0.7,
+    max_tokens=2000,
+    max_retries=3
+)
+```
 
 ## Development
 
 ### Running Tests
 
 ```bash
-# Install development dependencies
-pip3 install -r requirements-dev.txt
-
 # Run all tests
-python3 -m pytest tests/ -v
+python -m pytest
 
-# Run specific test file
-python3 -m pytest tests/test_indexer.py -v
-
-# Run with coverage
-python3 -m pytest tests/ --cov=app --cov-report=term-missing
+# Run specific test suite
+python -m pytest tests/vector_store/
+python -m pytest tests/ontology/
 ```
 
-### Code Quality
+### Code Style
 
 ```bash
 # Format code
-black app/ tests/
+black .
 
-# Sort imports
-isort app/ tests/
+# Check types
+mypy .
 
-# Type checking
-mypy app/ tests/
-
-# Linting
-flake8 app/ tests/
+# Run linter
+flake8
 ```
-
-## Troubleshooting
-
-Common issues and solutions:
-
-1. **Qdrant Connection Issues**:
-   ```bash
-   # Check if Qdrant is running
-   docker ps | grep qdrant
-   
-   # Check logs
-   docker-compose logs qdrant
-   
-   # Restart Qdrant
-   docker-compose restart qdrant
-   ```
-
-2. **Storage Space Issues**:
-   ```bash
-   # Clear Qdrant data and start fresh
-   docker-compose down -v
-   rm -rf qdrant_data/*
-   docker-compose up -d qdrant
-   ```
-
-3. **API Rate Limits**:
-   - For OpenAI: Reduce batch size in indexing operations
-   - For Keboola: Use incremental updates instead of full extracts
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Make your changes
-4. Run tests and ensure they pass
-5. Submit a pull request
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Development Status
-
-### Completed Features
-- ✅ Basic metadata extraction from Keboola Storage API
-- ✅ Optimized batch processing with configurable parameters
-- ✅ Semantic search across all metadata types
-- ✅ CLI interface for indexing and searching
-- ✅ Support for OpenAI and SentenceTransformer embedding providers
-- ✅ Proper error handling and retries
-- ✅ State management for incremental updates
-- ✅ Advanced metadata filtering (component type, table, stage)
-- ✅ Rich search result formatting
-
-### In Progress
-- 🔄 Enhanced metadata extraction for transformations
-- 🔄 Improved column-level search capabilities
-- 🔄 Advanced filtering options for search results
-- 🔄 Metadata relationship mapping
-- 🔄 Search result scoring optimization
-- 🔄 Performance tuning for large-scale deployments
-
-### Planned Features
-- 📋 Real-time metadata updates
-- 📋 Advanced recommendation system
-- 📋 Custom scoring functions for search results
-- 📋 Integration with additional embedding providers
-- 📋 Enhanced documentation coverage
-- 📋 Automated testing for search filters
-- 📋 Search result caching
-- 📋 Advanced analytics and usage tracking
-- 📋 Custom plugin system for metadata processors
-- 📋 Integration with Keboola AI Assistant
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

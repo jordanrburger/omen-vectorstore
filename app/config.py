@@ -20,6 +20,7 @@ class Config(BaseModel):
     qdrant_host: str = Field(default="localhost")
     qdrant_port: int = Field(default=6333)
     qdrant_collection: str = Field(default="keboola_metadata")
+    qdrant_api_key: Optional[str] = Field(default=None)
     openai_api_key: Optional[str] = Field(default=None)
     embedding_model: str = Field(default="text-embedding-ada-002")
     device: str = Field(default="cpu")
@@ -28,12 +29,21 @@ class Config(BaseModel):
     def from_env(cls) -> "Config":
         """Create configuration from environment variables."""
         load_dotenv()  # Load .env file
+        
+        # Clean up QDRANT_HOST if it includes protocol or port
+        qdrant_host = get_env_or_default("QDRANT_HOST", "localhost")
+        if qdrant_host.startswith(("http://", "https://")):
+            qdrant_host = qdrant_host.split("://")[1]
+        if ":" in qdrant_host:
+            qdrant_host = qdrant_host.split(":")[0]
+            
         return cls(
             keboola_token=get_env_or_default("KEBOOLA_TOKEN", ""),
             keboola_api_url=get_env_or_default("KEBOOLA_API_URL", "https://connection.keboola.com"),
-            qdrant_host=get_env_or_default("QDRANT_HOST", "localhost"),
+            qdrant_host=qdrant_host,
             qdrant_port=int(get_env_or_default("QDRANT_PORT", "6333")),
             qdrant_collection=get_env_or_default("QDRANT_COLLECTION", "keboola_metadata"),
+            qdrant_api_key=get_env_or_default("QDRANT_API_KEY"),
             openai_api_key=get_env_or_default("OPENAI_API_KEY"),
             embedding_model=get_env_or_default("OPENAI_MODEL", "text-embedding-ada-002"),
             device=get_env_or_default("DEVICE", "cpu"),
