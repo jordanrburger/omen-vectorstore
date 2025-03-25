@@ -7,11 +7,14 @@ from typing import Dict, List, Optional, Any, Union, Callable
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
-from omen.core import get_logger, settings, batch_processor, state_manager
+from omen.core import get_logger, load_settings, BatchProcessor, StateManager
 from omen.vectorstore.embedding import EmbeddingProvider, get_embedding_provider
 from omen.vectorstore.models import MetadataDocument, SearchQuery, SearchResult
 
 logger = get_logger(__name__)
+settings = load_settings()
+batch_processor = BatchProcessor()
+state_manager = StateManager()
 
 
 class QdrantIndexer:
@@ -46,6 +49,7 @@ class QdrantIndexer:
             
             if self.collection_name not in collection_names:
                 logger.info(f"Creating collection {self.collection_name}")
+                logger.debug(f"Vector size: {self.vector_size}")
                 self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=models.VectorParams(
@@ -63,6 +67,8 @@ class QdrantIndexer:
                 logger.info(f"Created collection {self.collection_name}")
             else:
                 logger.info(f"Collection {self.collection_name} already exists")
+                collection_info = self.client.get_collection(self.collection_name)
+                logger.debug(f"Collection vector size: {collection_info.config.params.vectors.size}")
         except Exception as e:
             logger.error(f"Error ensuring collection: {e}")
             raise
@@ -121,6 +127,7 @@ class QdrantIndexer:
         
         # Generate embedding for the document content
         embeddings = embedding_provider.embed([document.content])
+        logger.debug(f"Generated embeddings with shape: {len(embeddings)}x{len(embeddings[0])}")
         
         # Create point
         point = models.PointStruct(

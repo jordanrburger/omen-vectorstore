@@ -63,7 +63,9 @@ class OpenAIProvider(EmbeddingProvider):
                 model=self.model,
                 input=texts,
             )
-            return [data.embedding for data in response.data]
+            embeddings = [data.embedding for data in response.data]
+            logger.debug(f"Generated embeddings with shape: {len(embeddings)}x{len(embeddings[0])}")
+            return embeddings
         except Exception as e:
             logger.error(f"Error generating embeddings: {e}")
             raise

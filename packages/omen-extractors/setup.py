@@ -16,7 +16,7 @@ setup(
         "omen-ontology>=0.1.0",
     ],
     extras_require={
-        "keboola": ["kbcstorage>=1.0.0"],
+        "keboola": ["kbcstorage==0.9.2"],
         "dev": [
             "pytest>=7.0.0",
             "black>=23.1.0",

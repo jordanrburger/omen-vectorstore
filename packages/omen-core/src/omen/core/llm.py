@@ -53,6 +53,9 @@ class LLMClient:
             **kwargs: Additional provider-specific arguments
         """
         self.provider = provider.lower()
+        if self.provider not in ["openai", "anthropic"]:
+            raise ValueError("Invalid provider. Must be 'openai' or 'anthropic'")
+            
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -60,176 +63,146 @@ class LLMClient:
         
         if not self.api_key:
             raise ValueError(f"API key not provided for {provider}")
-            
+        
         if self.provider == "openai":
-            openai.api_key = self.api_key
+            self.client = openai.Client(api_key=self.api_key)
         elif self.provider == "anthropic" and ANTHROPIC_AVAILABLE:
             self.client = anthropic.Client(api_key=self.api_key)
         else:
-            raise ValueError(f"Unsupported provider: {provider}")
-            
-        self._setup_retry()
+            raise ValueError(f"Invalid provider: {provider}")
         
+        self._setup_retry()
+
     def _setup_retry(self):
         """Set up retry decorator for API calls."""
         self.retry_decorator = retry(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=1, min=4, max=10),
-            retry=retry_if_exception_type((openai.error.APIError, openai.error.RateLimitError)),
+            retry=retry_if_exception_type((Exception,)),  # Retry on any exception
             before_sleep=before_sleep_log(logger, logging.WARNING)
         )
+
+    def _generate_openai(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        """Generate text using OpenAI."""
+        @self.retry_decorator
+        def _call_openai():
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens
+            )
+            return response.choices[0].message.content
         
-    @property
-    def retry(self):
-        """Get the retry decorator."""
-        return self.retry_decorator
+        return _call_openai()
+
+    def _generate_anthropic(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        """Generate text using Anthropic."""
+        if not ANTHROPIC_AVAILABLE:
+            raise ImportError("Anthropic package not installed")
         
+        @self.retry_decorator
+        def _call_anthropic():
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            
+            response = self.client.messages.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens
+            )
+            return response.content[0].text
+        
+        return _call_anthropic()
+
     def generate(
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
         **kwargs
     ) -> str:
-        """Generate text from a prompt.
+        """Generate text using the configured provider.
         
         Args:
-            prompt: The prompt to generate from
-            system_prompt: Optional system prompt
-            **kwargs: Additional arguments to pass to the provider
+            prompt: The prompt to generate text from
+            system_prompt: Optional system prompt to set context
+            **kwargs: Additional provider-specific arguments
             
         Returns:
             Generated text
         """
         if self.provider == "openai":
-            return self._generate_openai(prompt, system_prompt, **kwargs)
+            return self._generate_openai(prompt, system_prompt)
         elif self.provider == "anthropic":
-            return self._generate_anthropic(prompt, system_prompt, **kwargs)
+            return self._generate_anthropic(prompt, system_prompt)
         else:
-            raise ValueError(f"Unsupported provider: {self.provider}")
-            
-    @retry
-    def _generate_openai(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        **kwargs
-    ) -> str:
-        """Generate text using OpenAI API."""
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-        
-        response = openai.ChatCompletion.create(
-            model=self.model,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            **kwargs
-        )
-        
-        return response.choices[0].message.content
-        
-    @retry
-    def _generate_anthropic(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        **kwargs
-    ) -> str:
-        """Generate text using Anthropic API."""
-        if not ANTHROPIC_AVAILABLE:
-            raise ImportError("Anthropic package not installed")
-            
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-        
-        response = self.client.messages.create(
-            model=self.model,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            **kwargs
-        )
-        
-        return response.content[0].text
-        
-    def generate_structured(
-        self,
-        prompt: str,
-        schema: Dict[str, Any],
-        system_prompt: Optional[str] = None,
-        **kwargs
-    ) -> Dict[str, Any]:
-        """Generate structured data from a prompt.
+            raise ValueError(f"Invalid provider: {self.provider}")
+
+    def generate_embedding(self, text: str) -> List[float]:
+        """Generate embeddings for text.
         
         Args:
-            prompt: The prompt to generate from
-            schema: JSON schema defining the structure
-            system_prompt: Optional system prompt
-            **kwargs: Additional arguments to pass to the provider
-            
-        Returns:
-            Generated structured data
-        """
-        schema_str = json.dumps(schema, indent=2)
-        full_prompt = f"""Generate JSON data matching this schema:
-{schema_str}
-
-Based on this prompt:
-{prompt}
-
-Return only valid JSON matching the schema."""
-        
-        response = self.generate(full_prompt, system_prompt, **kwargs)
-        
-        # Extract JSON from response
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
-        if not json_match:
-            raise ValueError("No valid JSON found in response")
-            
-        try:
-            return json.loads(json_match.group())
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in response: {e}")
-            
-    def generate_embedding(
-        self,
-        text: str,
-        model: Optional[str] = None,
-        **kwargs
-    ) -> List[float]:
-        """Generate embedding for text.
-        
-        Args:
-            text: Text to embed
-            model: Optional model to use for embedding
-            **kwargs: Additional arguments to pass to the provider
+            text: Text to generate embeddings for
             
         Returns:
             List of embedding values
         """
         if self.provider == "openai":
-            return self._generate_embedding_openai(text, model, **kwargs)
-        else:
-            raise ValueError(f"Embedding not supported for provider: {self.provider}")
+            @self.retry_decorator
+            def _call_openai():
+                response = self.client.embeddings.create(
+                    model="text-embedding-3-large",
+                    input=text
+                )
+                return response.data[0].embedding
             
-    @retry
-    def _generate_embedding_openai(
+            return _call_openai()
+        else:
+            raise ValueError(f"Embeddings not supported for provider: {self.provider}")
+
+    def generate_structured(
         self,
-        text: str,
-        model: Optional[str] = None,
+        prompt: str,
+        schema: Dict[str, Any],
         **kwargs
-    ) -> List[float]:
-        """Generate embedding using OpenAI API."""
-        model = model or "text-embedding-ada-002"
+    ) -> Dict[str, Any]:
+        """Generate structured data using the configured provider.
         
-        response = openai.Embedding.create(
-            model=model,
-            input=text,
-            **kwargs
-        )
+        Args:
+            prompt: The prompt to generate data from
+            schema: JSON schema describing the expected structure
+            **kwargs: Additional provider-specific arguments
+            
+        Returns:
+            Generated structured data
+        """
+        # Add schema to prompt
+        schema_prompt = f"""
+        Generate a JSON object matching this schema:
+        {json.dumps(schema, indent=2)}
         
-        return response.data[0].embedding 
+        Return only the JSON object, no other text.
+        """
+        
+        # Generate response
+        response = self.generate(prompt, system_prompt=schema_prompt)
+        
+        # Extract JSON from response
+        try:
+            # Find JSON object in response
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if not json_match:
+                raise ValueError("No JSON object found in response")
+            
+            # Parse JSON
+            return json.loads(json_match.group())
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse JSON from response: {e}") 

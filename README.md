@@ -51,20 +51,29 @@ pip install -e ".[dev,keboola]"
 
 ### Command Line Interface
 
-The OMEN CLI provides commands for managing metadata extraction, search, and the API server.
+The OMEN CLI provides commands for managing metadata extraction, search, ontology, and the API server.
 
 ```bash
-# Show help
+# Show help and available commands
 omen --help
 
 # Extract metadata from Keboola
-omen extract keboola --token YOUR_KEBOOLA_TOKEN
+omen extract keboola --token YOUR_KEBOOLA_TOKEN [--url API_URL] [--incremental/--full] [--batch-size N] [--vectorize/--no-vectorize] [--index/--no-index]
 
 # Search metadata
-omen search query "Find tables with customer data"
+omen search query "Find tables with customer data" [--limit N] [--type TYPE]
+
+# View ontology statistics
+omen ontology stats
+
+# Clear ontology data
+omen ontology clear
 
 # Start the API server
-omen api start --port 8000
+omen api start [--host HOST] [--port PORT] [--reload/--no-reload]
+
+# Show current configuration
+omen config show
 ```
 
 ### API Server

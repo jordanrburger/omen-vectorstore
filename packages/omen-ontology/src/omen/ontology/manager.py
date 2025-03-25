@@ -10,7 +10,7 @@ import os
 from typing import Dict, List, Optional, Any, Set, Tuple
 from pathlib import Path
 
-from omen.core import get_logger, settings
+from omen.core import get_logger, AppSettings
 from omen.ontology.models import Entity, Relationship, Triple, EntityType, RelationshipType
 from omen.ontology.rdf_store import RDFStore
 
@@ -32,7 +32,7 @@ class OntologyManager:
         Args:
             state_dir: Directory for storing ontology state
         """
-        self.state_dir = state_dir or settings.ontology.storage_path
+        self.state_dir = state_dir or AppSettings.ontology.storage_path
         self.entities: Dict[str, Entity] = {}
         self.relationships: Dict[str, Relationship] = {}
         self.entity_types: Set[EntityType] = set()

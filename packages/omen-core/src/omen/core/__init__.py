@@ -5,21 +5,25 @@ This package provides the foundational components used across the OMEN platform,
 including configuration management, logging, state management, and core utilities.
 """
 
-from omen.core.batch import BatchProcessor
-from omen.core.config import Config
+import pkg_resources
+
+from omen.core.config import AppSettings, load_settings
+from omen.core.logging import configure_logging, get_logger
 from omen.core.llm import LLMClient
-from omen.core.logging import setup_logging
 from omen.core.state import StateManager
-from omen.core.utils import get_version
+from omen.core.batch import BatchProcessor
+
+__version__ = pkg_resources.get_distribution("omen-core").version
 
 __all__ = [
-    "BatchProcessor",
-    "Config",
+    "AppSettings",
+    "load_settings",
+    "configure_logging",
+    "get_logger",
     "LLMClient",
-    "setup_logging",
     "StateManager",
-    "get_version",
+    "BatchProcessor",
 ]
 
 # Configure logging by default
-setup_logging()
+configure_logging()

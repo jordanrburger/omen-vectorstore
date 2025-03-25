@@ -1,109 +1,134 @@
 """
 Configuration management for the OMEN platform.
+
+This module provides configuration management functionality, including
+loading settings from environment variables and configuration files.
 """
+
+import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+logger = logging.getLogger(__name__)
 
 class OpenAISettings(BaseModel):
     """OpenAI API settings."""
-    api_key: str = Field(..., description="OpenAI API key")
-    model: str = Field("gpt-4", description="OpenAI model to use")
-    embedding_model: str = Field("text-embedding-3-large", description="OpenAI embedding model to use")
-    temperature: float = Field(0.7, description="Temperature for generation")
-    max_tokens: int = Field(2000, description="Maximum tokens to generate")
-    embedding_dimension: int = Field(1536, description="Dimension of embeddings")
+    api_key: Optional[str] = None
+    model: str = "gpt-4"
+    embedding_model: str = "text-embedding-3-large"
+    temperature: float = 0.7
+    max_tokens: int = 2000
+    embedding_dimension: int = 3072
 
+    @model_validator(mode='before')
+    @classmethod
+    def load_env_vars(cls, values):
+        """Load environment variables."""
+        if not values.get('api_key'):
+            values['api_key'] = os.getenv('OPENAI_API_KEY')
+        return values
 
 class QdrantSettings(BaseModel):
-    """Qdrant settings."""
-    host: str = Field("localhost", description="Qdrant host")
-    port: int = Field(6333, description="Qdrant port")
-    grpc_port: int = Field(6334, description="Qdrant gRPC port")
-    prefer_grpc: bool = Field(True, description="Prefer gRPC over HTTP")
-    collection_name: str = Field("keboola_metadata", description="Qdrant collection name")
-
+    """Qdrant vector store settings."""
+    host: str = "localhost"
+    port: int = 6333
+    grpc_port: int = 6334
+    prefer_grpc: bool = True
+    collection_name: str = "omen_collection"
 
 class KeboolaSettings(BaseModel):
-    """Keboola connection settings."""
-    url: str = Field(..., description="Keboola Storage API URL")
-    token: str = Field(..., description="Keboola Storage API token")
+    """Keboola API settings."""
+    url: Optional[str] = None
+    token: Optional[str] = None
 
+    @model_validator(mode='before')
+    @classmethod
+    def load_env_vars(cls, values):
+        """Load environment variables."""
+        if not values.get('url'):
+            values['url'] = os.getenv('KEBOOLA_URL')
+        if not values.get('token'):
+            values['token'] = os.getenv('KEBOOLA_TOKEN')
+        return values
 
 class OntologySettings(BaseModel):
-    """Ontology settings."""
-    storage_path: Path = Field(Path("./state/ontology"), description="Path to ontology storage")
-
+    """Ontology storage settings."""
+    storage_path: Path = Path("./state/ontology")
 
 class AppSettings(BaseModel):
-    """OMEN application settings."""
-    openai: OpenAISettings
-    qdrant: QdrantSettings
-    keboola: KeboolaSettings
-    ontology: OntologySettings
-    state_file: Path = Field(Path("./state/state.json"), description="Path to state file")
-    log_level: str = Field("INFO", description="Log level")
-    batch_size: int = Field(100, description="Batch size for processing")
-    max_workers: int = Field(4, description="Maximum number of worker threads/processes")
-    max_retries: int = Field(3, description="Maximum number of retries")
+    """Main application settings."""
+    openai: OpenAISettings = OpenAISettings()
+    qdrant: QdrantSettings = QdrantSettings()
+    keboola: KeboolaSettings = KeboolaSettings()
+    ontology: OntologySettings = OntologySettings()
+    state_file: Path = Path("state/state.json")
+    log_level: str = "INFO"
+    batch_size: int = 100
+    max_workers: int = 4
+    max_retries: int = 3
 
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, v):
+        """Validate log level."""
+        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if v.upper() not in valid_levels:
+            raise ValueError(f"Invalid log level: {v}. Must be one of {valid_levels}")
+        return v.upper()
 
-def load_settings(env_file: Optional[str] = None) -> AppSettings:
-    """Load settings from environment variables and .env file."""
-    if env_file:
-        load_dotenv(env_file)
-    else:
-        load_dotenv()
+    def save(self, path: Path) -> None:
+        """Save settings to a file.
+        
+        Args:
+            path: Path to save settings to
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(self.model_dump(), f, indent=2, default=str)
 
-    openai_settings = OpenAISettings(
-        api_key=os.getenv("OPENAI_API_KEY", ""),
-        model=os.getenv("OPENAI_MODEL", "gpt-4"),
-        embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large"),
-        temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
-        max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "2000")),
-        embedding_dimension=int(os.getenv("OPENAI_EMBEDDING_DIMENSION", "1536")),
-    )
+    @classmethod
+    def load(cls, path: Path) -> "AppSettings":
+        """Load settings from a file.
+        
+        Args:
+            path: Path to load settings from
+            
+        Returns:
+            Loaded settings
+        """
+        if not path.exists():
+            return cls()
+        
+        with open(path) as f:
+            data = json.load(f)
+            # Convert string paths back to Path objects
+            if "state_file" in data:
+                data["state_file"] = Path(data["state_file"])
+            if "ontology" in data and "storage_path" in data["ontology"]:
+                data["ontology"]["storage_path"] = Path(data["ontology"]["storage_path"])
+            return cls.model_validate(data)
 
-    qdrant_settings = QdrantSettings(
-        host=os.getenv("QDRANT_HOST", "localhost"),
-        port=int(os.getenv("QDRANT_PORT", "6333")),
-        grpc_port=int(os.getenv("QDRANT_GRPC_PORT", "6334")),
-        prefer_grpc=os.getenv("QDRANT_PREFER_GRPC", "True").lower() == "true",
-        collection_name=os.getenv("QDRANT_COLLECTION_NAME", "keboola_metadata"),
-    )
-
-    keboola_settings = KeboolaSettings(
-        url=os.getenv("KEBOOLA_URL", ""),
-        token=os.getenv("KEBOOLA_TOKEN", ""),
-    )
-
-    # Ensure state directories exist
-    state_dir = Path(os.getenv("STATE_DIR", "./state"))
-    state_dir.mkdir(exist_ok=True, parents=True)
+def load_settings() -> AppSettings:
+    """Load settings from environment and config file.
     
-    ontology_dir = Path(os.getenv("ONTOLOGY_DIR", "./state/ontology"))
-    ontology_dir.mkdir(exist_ok=True, parents=True)
-
-    ontology_settings = OntologySettings(
-        storage_path=ontology_dir,
-    )
-
-    return AppSettings(
-        openai=openai_settings,
-        qdrant=qdrant_settings,
-        keboola=keboola_settings,
-        ontology=ontology_settings,
-        state_file=state_dir / "state.json",
-        log_level=os.getenv("LOG_LEVEL", "INFO"),
-        batch_size=int(os.getenv("BATCH_SIZE", "100")),
-        max_workers=int(os.getenv("MAX_WORKERS", "4")),
-        max_retries=int(os.getenv("MAX_RETRIES", "3")),
-    )
-
+    Returns:
+        Loaded settings
+    """
+    config_path = Path("config.json")
+    if config_path.exists():
+        with open(config_path) as f:
+            data = json.load(f)
+            # Convert string paths back to Path objects
+            if "state_file" in data:
+                data["state_file"] = Path(data["state_file"])
+            if "ontology" in data and "storage_path" in data["ontology"]:
+                data["ontology"]["storage_path"] = Path(data["ontology"]["storage_path"])
+            return AppSettings.model_validate(data)
+    return AppSettings.model_validate({})
 
 # Default settings instance
 settings = load_settings() 

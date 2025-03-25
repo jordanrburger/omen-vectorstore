@@ -9,7 +9,7 @@ import subprocess
 from rich.console import Console
 from rich.table import Table
 
-from omen.core import configure_logging, get_logger, settings
+from omen.core import configure_logging, get_logger, AppSettings
 from omen.vectorstore import VectorSearch, QdrantIndexer, get_embedding_provider
 from omen.ontology import OntologyManager
 
@@ -261,23 +261,23 @@ def config_show():
         # OpenAI settings
         table.add_section()
         table.add_row("OpenAI Settings", "")
-        table.add_row("  Model", settings.openai.model)
-        table.add_row("  Embedding Model", settings.openai.embedding_model)
-        table.add_row("  API Key", "..." + settings.openai.api_key[-4:] if settings.openai.api_key else "Not set")
+        table.add_row("  Model", AppSettings.openai.model)
+        table.add_row("  Embedding Model", AppSettings.openai.embedding_model)
+        table.add_row("  API Key", "..." + AppSettings.openai.api_key[-4:] if AppSettings.openai.api_key else "Not set")
         
         # Qdrant settings
         table.add_section()
         table.add_row("Qdrant Settings", "")
-        table.add_row("  Host", settings.qdrant.host)
-        table.add_row("  Port", str(settings.qdrant.port))
-        table.add_row("  Collection", settings.qdrant.collection_name)
+        table.add_row("  Host", AppSettings.qdrant.host)
+        table.add_row("  Port", str(AppSettings.qdrant.port))
+        table.add_row("  Collection", AppSettings.qdrant.collection_name)
         
         # Application settings
         table.add_section()
         table.add_row("Application Settings", "")
-        table.add_row("  State Directory", str(settings.state_file.parent))
-        table.add_row("  Ontology Directory", str(settings.ontology.storage_path))
-        table.add_row("  Log Level", settings.log_level)
+        table.add_row("  State Directory", str(AppSettings.state_file.parent))
+        table.add_row("  Ontology Directory", str(AppSettings.ontology.storage_path))
+        table.add_row("  Log Level", AppSettings.log_level)
         
         console.print(table)
     except Exception as e:

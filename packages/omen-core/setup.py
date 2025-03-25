@@ -13,7 +13,7 @@ setup(
         "pydantic>=2.0.0",
         "tenacity>=8.0.0",
         "openai>=1.0.0",
-        "anthropic>=0.3.0",  # Optional dependency
+        "anthropic>=0.3.0",
         "python-dotenv>=1.0.0",
         "rich>=13.0.0",
         "typing-extensions>=4.5.0",
