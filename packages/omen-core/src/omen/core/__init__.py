@@ -1,42 +1,25 @@
 """
 Core functionality for the OMEN platform.
+
+This package provides the foundational components used across the OMEN platform,
+including configuration management, logging, state management, and core utilities.
 """
 
-from omen.core.batch import BatchProcessor, batch_processor
-from omen.core.config import (
-    AppSettings,
-    KeboolaSettings,
-    OpenAISettings,
-    QdrantSettings,
-    OntologySettings,
-    load_settings,
-    settings,
-)
-from omen.core.logging import configure_logging, get_logger
-from omen.core.state import StateManager, state_manager
+from omen.core.batch import BatchProcessor
+from omen.core.config import Config
+from omen.core.llm import LLMClient
+from omen.core.logging import setup_logging
+from omen.core.state import StateManager
+from omen.core.utils import get_version
 
 __all__ = [
-    # Batch processing
     "BatchProcessor",
-    "batch_processor",
-    
-    # Configuration
-    "AppSettings",
-    "KeboolaSettings",
-    "OpenAISettings",
-    "QdrantSettings",
-    "OntologySettings",
-    "load_settings",
-    "settings",
-    
-    # Logging
-    "configure_logging",
-    "get_logger",
-    
-    # State management
+    "Config",
+    "LLMClient",
+    "setup_logging",
     "StateManager",
-    "state_manager",
+    "get_version",
 ]
 
 # Configure logging by default
-configure_logging()
+setup_logging()
