@@ -1,209 +1,121 @@
-# Keboola Vector Store
+# OMEN Platform
 
-A powerful vector store and ontology system for Keboola metadata, enabling semantic search and knowledge graph capabilities.
+OMEN (Ontology-powered Metadata Engine) is a platform for extracting, processing, and indexing metadata from various data sources. It provides a powerful search and recommendation API based on vector similarity search and knowledge graph relationships.
 
-## Features
+## Project Structure
 
-- **Vector Store**
-  - Semantic search using embeddings
-  - Support for multiple embedding providers (OpenAI, SentenceTransformer)
-  - Batch processing and incremental updates
-  - Efficient similarity search with Qdrant
+The OMEN platform is organized as a monorepo with the following packages:
 
-- **Ontology System**
-  - LLM-powered entity extraction from metadata
-  - Relationship detection between entities
-  - SPARQL query support
-  - Schema validation and compliance
-  - Parallel batch processing with retries
-
-- **Hybrid Search**
-  - Combine vector-based semantic search with ontology-based structured search
-  - Rich context in search results
-  - Filtering by metadata type and relationships
+- `omen-core`: Core functionality, models, and utilities
+- `omen-vectorstore`: Vector similarity search and document indexing 
+- `omen-ontology`: Knowledge graph and ontology management
+- `omen-api`: REST API server
+- `omen-cli`: Command-line interface
+- `omen-extractors`: Data source extractors
 
 ## Architecture
 
-The system follows a four-step architecture:
+The OMEN platform follows a four-step architecture:
 
-1. **Metadata Extraction** (using Keboola SAPI)
-   - Extract comprehensive metadata from Keboola
-   - Include bucket information, table details, and column statistics
-   - Capture quality metrics and transformation code
-
-2. **Metadata Processing and Vectorization**
-   - Process metadata into normalized documents
-   - Generate embeddings using configured providers
-   - Extract entities and relationships for ontology
-
-3. **Indexing**
-   - Store embeddings in Qdrant vector store
-   - Build and maintain ontology knowledge graph
-   - Support incremental updates
-
-4. **Search and Recommendation API**
-   - Provide unified search interface
-   - Support both semantic and structured queries
-   - Enable hybrid search capabilities
+1. **Metadata Extraction**: Extract metadata from data sources (e.g., Keboola Storage API)
+2. **Metadata Processing and Vectorization**: Process raw metadata into documents and create vector embeddings
+3. **Indexing**: Store documents and vectors in Qdrant vector database
+4. **Search and Recommendation API**: Provide API endpoints for semantic search and related content
 
 ## Installation
 
-1. Clone the repository:
+### Using pip
+
 ```bash
-git clone https://github.com/keboola/omen-vectorstore.git
-cd omen-vectorstore
+# Install the base package
+pip install omen
+
+# Install with Keboola extractor
+pip install omen[keboola]
+
+# Install development dependencies
+pip install omen[dev]
 ```
 
-2. Install dependencies:
-```bash
-pip3 install -r requirements.txt
-```
+### Development Installation
 
-3. Set up environment variables:
 ```bash
-cp .env.example .env
-# Edit .env with your configuration
+git clone https://github.com/keboola/omen-platform
+cd omen-platform
+
+# Install in development mode
+pip install -e ".[dev,keboola]"
 ```
 
 ## Usage
 
-### Vector Store
+### Command Line Interface
 
-```python
-from app.vector_store import VectorStore
-from app.llm_client import LLMClient
+The OMEN CLI provides commands for managing metadata extraction, search, and the API server.
 
-# Initialize components
-vector_store = VectorStore()
-llm_client = LLMClient(
-    provider="openai",
-    model="gpt-4",
-    api_key="your-api-key"
-)
+```bash
+# Show help
+omen --help
 
-# Index metadata
-vector_store.index_metadata(metadata_list)
+# Extract metadata from Keboola
+omen extract keboola --token YOUR_KEBOOLA_TOKEN
 
-# Search
-results = vector_store.search(
-    query="Find tables related to customer support",
-    limit=10
-)
+# Search metadata
+omen search query "Find tables with customer data"
+
+# Start the API server
+omen api start --port 8000
 ```
 
-### Ontology System
+### API Server
 
-```python
-from app.ontology.builder import OntologyBuilder
-from app.ontology.manager import OntologyManager
+The OMEN API server provides endpoints for search and ontology management.
 
-# Initialize components
-ontology_manager = OntologyManager()
-builder = OntologyBuilder(llm_client, ontology_manager)
+```bash
+# Start the API server
+omen api start
 
-# Build ontology
-builder.build_ontology(metadata_list)
-
-# Query ontology
-results = ontology_manager.query("""
-    SELECT ?table ?column
-    WHERE {
-        ?table a :Table ;
-              :hasColumn ?column .
-        ?column :type "string" .
-    }
-""")
+# Or directly using Python
+python -m omen.api.main
 ```
 
-### Hybrid Search
-
-```python
-from app.search import HybridSearch
-
-# Initialize hybrid search
-search = HybridSearch(ontology_manager, vector_store)
-
-# Perform hybrid search
-results = search.search(
-    query="Find tables related to customer support",
-    limit=10,
-    use_ontology=True,
-    use_vector=True
-)
-```
+The API will be available at http://localhost:8000 with OpenAPI documentation at http://localhost:8000/docs.
 
 ## Configuration
 
-### Vector Store Settings
+OMEN uses environment variables or a .env file for configuration:
 
-```python
-vector_store = VectorStore(
-    collection_name="keboola_metadata",
-    embedding_dimension=1536,
-    batch_size=100,
-    max_retries=3
-)
 ```
+# OpenAI API
+OPENAI_API_KEY=your-api-key
+OPENAI_MODEL=gpt-4
+OPENAI_EMBEDDING_MODEL=text-embedding-3-large
 
-### Ontology Settings
+# Qdrant Vector DB
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+QDRANT_COLLECTION=omen
 
-```python
-builder = OntologyBuilder(
-    llm_client=llm_client,
-    ontology_manager=ontology_manager,
-    batch_size=10,
-    max_workers=4,
-    max_retries=3
-)
-```
-
-### LLM Settings
-
-```python
-llm_client = LLMClient(
-    provider="openai",
-    model="gpt-4",
-    api_key="your-api-key",
-    temperature=0.7,
-    max_tokens=2000,
-    max_retries=3
-)
+# Application settings
+LOG_LEVEL=INFO
+DEBUG=False
 ```
 
 ## Development
 
+### Project Setup
+
+```bash
+git clone https://github.com/keboola/omen-platform
+cd omen-platform
+```
+
 ### Running Tests
 
 ```bash
-# Run all tests
-python -m pytest
-
-# Run specific test suite
-python -m pytest tests/vector_store/
-python -m pytest tests/ontology/
+pytest
 ```
-
-### Code Style
-
-```bash
-# Format code
-black .
-
-# Check types
-mypy .
-
-# Run linter
-flake8
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.

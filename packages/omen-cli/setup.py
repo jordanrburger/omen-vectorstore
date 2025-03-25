@@ -1,29 +1,25 @@
-from setuptools import setup, find_packages
+from setuptools import setup, find_namespace_packages
 
 setup(
-    name="omen",
+    name="omen-cli",
     version="0.1.0",
-    description="OMEN Platform - Ontology-powered Metadata Engine",
+    description="OMEN Platform - Command Line Interface",
     author="Keboola",
     author_email="info@keboola.com",
     url="https://github.com/keboola/omen-platform",
-    packages=find_packages(),
+    package_dir={"": "src"},
+    packages=find_namespace_packages(where="src"),
     python_requires=">=3.8",
     install_requires=[
         "omen-core>=0.1.0",
         "omen-vectorstore>=0.1.0",
         "omen-ontology>=0.1.0",
-        "omen-api>=0.1.0",
-        "omen-cli>=0.1.0",
+        "click>=8.1.3",
+        "rich>=12.5.0",
     ],
-    extras_require={
-        "keboola": ["omen-extractors[keboola]>=0.1.0"],
-        "dev": [
-            "pytest>=7.0.0",
-            "black>=23.1.0",
-            "mypy>=1.0.0",
-            "flake8>=6.0.0",
-            "isort>=5.12.0",
+    entry_points={
+        "console_scripts": [
+            "omen=omen.cli:cli",
         ],
     },
     classifiers=[
