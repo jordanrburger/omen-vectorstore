@@ -2,7 +2,7 @@
 RDF triple store for ontology data with SPARQL query support.
 """
 import os
-from typing import Dict, List, Optional, Any, Union, Tuple
+from typing import Dict, List, Optional, Any, Union, Tuple, Set
 from pathlib import Path
 
 import networkx as nx
@@ -45,6 +45,8 @@ class RDFStore:
         self.namespace_manager.bind("kbc-entity", KBC_ENTITY)
         self.namespace_manager.bind("kbc-rel", KBC_RELATIONSHIP)
         self.namespace_manager.bind("kbc-prop", KBC_PROPERTY)
+        self.namespace_manager.bind("rdfs", RDFS)
+        self.namespace_manager.bind("owl", OWL)
         self.graph.namespace_manager = self.namespace_manager
         
         # Add basic ontology axioms
@@ -123,43 +125,62 @@ class RDFStore:
         Args:
             relationship: Relationship to add
         """
-        source_uri = KBC_ENTITY[relationship.source_id]
-        target_uri = KBC_ENTITY[relationship.target_id]
-        rel_type_uri = KBC[relationship.type.value]
-        rel_uri = KBC_RELATIONSHIP[relationship.id]
-        
-        # Add the direct relationship between source and target
-        self.graph.add((source_uri, rel_type_uri, target_uri))
-        
-        # Also create a relationship instance for more detailed information
-        self.graph.add((rel_uri, RDF.type, KBC.Relationship))
-        self.graph.add((rel_uri, KBC.sourceEntity, source_uri))
-        self.graph.add((rel_uri, KBC.targetEntity, target_uri))
-        self.graph.add((rel_uri, KBC.relationshipType, rel_type_uri))
-        
-        # Add creation and update timestamps
-        self.graph.add((rel_uri, KBC.createdAt, Literal(relationship.created_at.isoformat(), datatype=XSD.dateTime)))
-        self.graph.add((rel_uri, KBC.updatedAt, Literal(relationship.updated_at.isoformat(), datatype=XSD.dateTime)))
-        
-        # Add properties
-        for prop_name, prop_value in relationship.properties.items():
-            prop_uri = KBC_PROPERTY[prop_name]
+        try:
+            source_uri = KBC_ENTITY[relationship.source_id]
+            target_uri = KBC_ENTITY[relationship.target_id]
+            rel_type_uri = KBC[relationship.type.value]
+            rel_uri = KBC_RELATIONSHIP[relationship.id]
             
-            # Handle different property value types (same as for entities)
-            if isinstance(prop_value, str):
-                self.graph.add((rel_uri, prop_uri, Literal(prop_value)))
-            elif isinstance(prop_value, int):
-                self.graph.add((rel_uri, prop_uri, Literal(prop_value, datatype=XSD.integer)))
-            elif isinstance(prop_value, float):
-                self.graph.add((rel_uri, prop_uri, Literal(prop_value, datatype=XSD.float)))
-            elif isinstance(prop_value, bool):
-                self.graph.add((rel_uri, prop_uri, Literal(prop_value, datatype=XSD.boolean)))
-            elif prop_value is None:
-                continue
-            else:
-                # For complex types, store as JSON string
-                import json
-                self.graph.add((rel_uri, prop_uri, Literal(json.dumps(prop_value))))
+            # Validate URIs and ensure they're properly formed
+            for uri in [source_uri, target_uri, rel_type_uri, rel_uri]:
+                if not isinstance(uri, URIRef):
+                    logger.warning(f"Invalid URI reference: {uri}")
+            
+            # Verify that source and target entities are valid
+            if not relationship.source_id or not relationship.target_id:
+                logger.warning(f"Skipping relationship with empty source or target: {relationship.id}")
+                return
+                
+            # Add the direct relationship between source and target
+            self.graph.add((source_uri, rel_type_uri, target_uri))
+            
+            # Also create a relationship instance for more detailed information
+            self.graph.add((rel_uri, RDF.type, KBC.Relationship))
+            self.graph.add((rel_uri, KBC.sourceEntity, source_uri))
+            self.graph.add((rel_uri, KBC.targetEntity, target_uri))
+            self.graph.add((rel_uri, KBC.relationshipType, rel_type_uri))
+            
+            # Add creation and update timestamps
+            if relationship.created_at:
+                self.graph.add((rel_uri, KBC.createdAt, Literal(relationship.created_at.isoformat(), datatype=XSD.dateTime)))
+            if relationship.updated_at:
+                self.graph.add((rel_uri, KBC.updatedAt, Literal(relationship.updated_at.isoformat(), datatype=XSD.dateTime)))
+            
+            # Add properties
+            for prop_name, prop_value in relationship.properties.items():
+                if not prop_name:  # Skip empty property names
+                    continue
+                    
+                prop_uri = KBC_PROPERTY[prop_name]
+                
+                # Handle different property value types (same as for entities)
+                if isinstance(prop_value, str):
+                    self.graph.add((rel_uri, prop_uri, Literal(prop_value)))
+                elif isinstance(prop_value, int):
+                    self.graph.add((rel_uri, prop_uri, Literal(prop_value, datatype=XSD.integer)))
+                elif isinstance(prop_value, float):
+                    self.graph.add((rel_uri, prop_uri, Literal(prop_value, datatype=XSD.float)))
+                elif isinstance(prop_value, bool):
+                    self.graph.add((rel_uri, prop_uri, Literal(prop_value, datatype=XSD.boolean)))
+                elif prop_value is None:
+                    continue
+                else:
+                    # For complex types, store as JSON string
+                    import json
+                    self.graph.add((rel_uri, prop_uri, Literal(json.dumps(prop_value))))
+        except Exception as e:
+            logger.error(f"Error adding relationship to RDF store: {e}")
+            # Continue without failing the whole process
 
     def add_triple(self, triple: Triple) -> None:
         """Add a triple to the graph.
@@ -380,4 +401,506 @@ class RDFStore:
         """Clear the graph."""
         self.graph = Graph(store="Memory")
         self.graph.namespace_manager = self.namespace_manager
-        self._add_ontology_axioms() 
+        self._add_ontology_axioms()
+
+    def get_entities_by_type(self, entity_type: str) -> List[Dict[str, Any]]:
+        """Get all entities of a specified type.
+        
+        Args:
+            entity_type: Type of entity to retrieve (e.g., "table", "column")
+            
+        Returns:
+            List of entity dictionaries
+        """
+        entity_class = KBC[entity_type.capitalize()]
+        query = f"""
+            SELECT ?entity ?name ?desc
+            WHERE {{
+                ?entity rdf:type {entity_class.n3()} .
+                ?entity rdfs:label ?name .
+                OPTIONAL {{ ?entity rdfs:comment ?desc }}
+            }}
+        """
+        
+        results = []
+        for row in self.query_sparql(query):
+            entity_id = str(row.get('entity')).split('#')[-1]
+            results.append({
+                'id': entity_id,
+                'name': str(row.get('name')),
+                'description': str(row.get('desc')) if 'desc' in row else None,
+                'type': entity_type
+            })
+        
+        return results
+
+    def get_entity_properties(self, entity_id: str) -> Dict[str, Any]:
+        """Get all properties for a specific entity.
+        
+        Args:
+            entity_id: ID of the entity
+            
+        Returns:
+            Dictionary of property names and values
+        """
+        entity_uri = KBC_ENTITY[entity_id]
+        properties = {}
+        
+        for _, p, o in self.graph.triples((entity_uri, None, None)):
+            # Skip rdf:type and rdfs:label/comment
+            if p in (RDF.type, RDFS.label, RDFS.comment):
+                continue
+                
+            # Extract property name
+            prop_name = str(p).split('#')[-1]
+            
+            # Extract value
+            if isinstance(o, Literal):
+                properties[prop_name] = o.value
+            elif isinstance(o, URIRef):
+                properties[prop_name] = str(o).split('#')[-1]
+            else:
+                properties[prop_name] = str(o)
+                
+        return properties
+
+    def get_related_entities(self, entity_id: str, max_depth: int = 2) -> List[Dict[str, Any]]:
+        """Get entities related to the specified entity up to a certain path depth.
+        
+        Args:
+            entity_id: ID of the entity
+            max_depth: Maximum path length to explore
+            
+        Returns:
+            List of related entity dictionaries with relationship information
+        """
+        entity_uri = KBC_ENTITY[entity_id]
+        results = []
+        visited = set()
+        
+        def explore(node, depth=0, path=None):
+            if depth >= max_depth or node in visited:
+                return
+                
+            visited.add(node)
+            path = path or []
+            
+            # Explore outgoing relationships
+            for s, p, o in self.graph.triples((node, None, None)):
+                # Skip if not entity-to-entity relationship
+                if not isinstance(o, URIRef) or not str(o).startswith(str(KBC_ENTITY)):
+                    continue
+                    
+                # Skip rdf:type and other metadata
+                if p in (RDF.type, RDFS.label, RDFS.comment):
+                    continue
+                    
+                # Get relation and entity information
+                rel_type = str(p).split('#')[-1]
+                target_id = str(o).split('#')[-1]
+                
+                # Get entity name
+                target_name = None
+                for _, _, name in self.graph.triples((o, RDFS.label, None)):
+                    target_name = str(name)
+                    break
+                    
+                # Add to results
+                results.append({
+                    'source_id': entity_id,
+                    'target_id': target_id,
+                    'relationship': rel_type,
+                    'direction': 'outgoing',
+                    'path_length': depth + 1,
+                    'path': path + [{'id': target_id, 'name': target_name, 'rel': rel_type}]
+                })
+                
+                # Recurse
+                explore(o, depth + 1, path + [{'id': target_id, 'name': target_name, 'rel': rel_type}])
+            
+            # Explore incoming relationships
+            for s, p, o in self.graph.triples((None, None, node)):
+                # Skip if not entity-to-entity relationship
+                if not isinstance(s, URIRef) or not str(s).startswith(str(KBC_ENTITY)):
+                    continue
+                    
+                # Skip rdf:type and other metadata
+                if p in (RDF.type, RDFS.label, RDFS.comment):
+                    continue
+                    
+                # Get relation and entity information
+                rel_type = str(p).split('#')[-1]
+                source_id = str(s).split('#')[-1]
+                
+                # Get entity name
+                source_name = None
+                for _, _, name in self.graph.triples((s, RDFS.label, None)):
+                    source_name = str(name)
+                    break
+                    
+                # Add to results
+                results.append({
+                    'source_id': source_id,
+                    'target_id': entity_id,
+                    'relationship': rel_type,
+                    'direction': 'incoming',
+                    'path_length': depth + 1,
+                    'path': path + [{'id': source_id, 'name': source_name, 'rel': rel_type}]
+                })
+                
+                # Recurse
+                explore(s, depth + 1, path + [{'id': source_id, 'name': source_name, 'rel': rel_type}])
+        
+        # Start exploration
+        explore(entity_uri)
+        
+        return results
+
+    def semantic_search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Perform an advanced semantic search within the RDF graph.
+        
+        This method uses SPARQL to search for entities that match the query semantically,
+        taking into account entity names, types, properties, and relationship patterns.
+        
+        Args:
+            query: The search query
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of search results with scores and metadata
+        """
+        if len(self.graph) == 0:
+            logger.info("No entities in graph for semantic search")
+            return []
+            
+        try:
+            # Clean and prepare the query
+            clean_query = query.lower().strip()
+            query_terms = [term for term in clean_query.split() if len(term) > 2]
+            
+            if not query_terms:
+                # If no meaningful terms, use the original query
+                query_terms = [clean_query]
+            
+            # Get the proper namespace bindings from the graph
+            from rdflib import Namespace, Graph, URIRef, Literal
+            from rdflib.namespace import RDF, RDFS, XSD
+            
+            # Define the namespace for our ontology entities
+            ONT = Namespace("http://keboola.com/ontologies/metadata#")
+            
+            # Prepare the SPARQL query with advanced semantic search capabilities
+            sparql_query = """
+                PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                PREFIX ont: <http://keboola.com/ontologies/metadata#>
+                PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+                
+                SELECT DISTINCT ?entity ?name ?type ?desc (SUM(?matchScore) AS ?score) ?relCount
+                WHERE {
+                    # Get basic entity info
+                    ?entity rdf:type ?entityClass .
+                    ?entity rdfs:label ?name .
+                    
+                    # Only include actual entities
+                    FILTER EXISTS { ?entityClass rdfs:subClassOf* ont:Entity }
+                    
+                    # Get entity type
+                    ?entity ont:type ?type .
+                    
+                    # Optional description
+                    OPTIONAL { ?entity rdfs:comment ?desc }
+                    
+                    # Count related entities (weighting for well-connected entities)
+                    {
+                        SELECT ?entity (COUNT(?related) AS ?relCount)
+                        WHERE {
+                            { ?entity ?anyRelation ?related }
+                            UNION
+                            { ?related ?anyRelation ?entity }
+                            FILTER(?anyRelation != rdf:type)
+                        }
+                        GROUP BY ?entity
+                    }
+                    
+                    # Calculate name match score - exact matches get higher weight
+                    {
+                        SELECT ?entity (SUM(?termScore) AS ?matchScore)
+                        WHERE {
+                            ?entity rdfs:label ?name .
+                            
+                            # Define scores for different match types
+                            VALUES (?term ?termScore) {
+            """
+            
+            # Add each query term with different match scores
+            for term in query_terms:
+                sparql_query += f"""
+                                ("{term}" 3.0) # Full query term
+                """
+            
+            sparql_query += """
+                            }
+                            
+                            # Calculate scores based on match type
+                            BIND(
+                                IF(CONTAINS(LCASE(?name), ?term), ?termScore,
+                                  IF(CONTAINS(LCASE(STR(?desc)), ?term), ?termScore * 0.5, 0)
+                                ) AS ?score
+                            )
+                            
+                            # Only include entities with at least one match
+                            FILTER(?score > 0)
+                        }
+                        GROUP BY ?entity
+                    }
+                    
+                    # Add relationship-based context scoring
+                    UNION
+                    {
+                        # Find entities related to entities that match the query
+                        ?matchedEntity rdfs:label ?matchedName .
+                        ?matchedEntity ?relation ?entity .
+                        ?entity rdfs:label ?name .
+                        ?entity ont:type ?type .
+                        
+                        OPTIONAL { ?entity rdfs:comment ?desc }
+                        
+                        # Find matched entities first
+                        FILTER(
+                """
+            
+            # Add term filters for related entity search
+            term_filters = []
+            for term in query_terms:
+                term_filters.append(f"CONTAINS(LCASE(?matchedName), \"{term}\")")
+            
+            sparql_query += " || ".join(term_filters)
+            
+            sparql_query += """
+                        )
+                        
+                        # Exclude type relations
+                        FILTER(?relation != rdf:type)
+                        
+                        # Score is lower for related entities
+                        BIND(1.0 AS ?matchScore)
+                    }
+                }
+                GROUP BY ?entity ?name ?type ?desc ?relCount
+                ORDER BY DESC(?score) DESC(?relCount)
+                LIMIT %d
+            """ % limit
+            
+            # Initialize results list
+            results = []
+            
+            try:
+                # Execute the query
+                qres = self.graph.query(sparql_query)
+                
+                # Process results
+                for row in qres:
+                    # Extract entity URI and properties
+                    entity_uri = str(row.entity) if hasattr(row, 'entity') else None
+                    if not entity_uri:
+                        continue
+                        
+                    entity_id = entity_uri.split('#')[-1]
+                    name = str(row.name) if hasattr(row, 'name') else None
+                    entity_type = str(row.type).split('#')[-1] if hasattr(row, 'type') else "unknown"
+                    description = str(row.desc) if hasattr(row, 'desc') else None
+                    score = float(row.score) if hasattr(row, 'score') else 0.5
+                    rel_count = int(row.relCount) if hasattr(row, 'relCount') else 0
+                    
+                    # Add relationship count to score to boost well-connected entities
+                    adjusted_score = score + (rel_count * 0.01)
+                    
+                    # Build entity info
+                    entity_info = {
+                        "id": entity_id,
+                        "name": name,
+                        "type": entity_type,
+                        "score": adjusted_score
+                    }
+                    
+                    if description:
+                        entity_info["description"] = description
+                    
+                    # Get relationships for context
+                    entity_info["relationships"] = self._get_direct_relationships(entity_id)
+                    
+                    results.append(entity_info)
+                    
+                return results
+            except Exception as e:
+                logger.error(f"Error executing SPARQL query: {e}")
+                return []
+        except Exception as e:
+            logger.error(f"Error in semantic search: {e}")
+            return []
+    
+    def _get_direct_relationships(self, entity_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Get direct relationships for an entity.
+        
+        Args:
+            entity_id: Entity ID
+            limit: Maximum number of relationships to return
+            
+        Returns:
+            List of relationship dictionaries
+        """
+        try:
+            # Create entity URI
+            from rdflib import URIRef, Namespace
+            
+            ONT = Namespace("http://keboola.com/ontologies/metadata#")
+            entity_uri = ONT[entity_id]
+            
+            # Query for direct relationships
+            sparql_query = """
+                PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                PREFIX ont: <http://keboola.com/ontologies/metadata#>
+                
+                SELECT DISTINCT ?relation ?relLabel ?target ?targetName ?targetType
+                WHERE {
+                    {
+                        # Outgoing relationships
+                        <%s> ?relation ?target .
+                        ?target rdfs:label ?targetName .
+                        ?target ont:type ?targetType .
+                        
+                        # Get relation label if available
+                        OPTIONAL { ?relation rdfs:label ?relLabel }
+                        
+                        # Exclude rdf:type relationships
+                        FILTER(?relation != rdf:type)
+                    }
+                    UNION
+                    {
+                        # Incoming relationships
+                        ?target ?relation <%s> .
+                        ?target rdfs:label ?targetName .
+                        ?target ont:type ?targetType .
+                        
+                        # Get relation label if available
+                        OPTIONAL { ?relation rdfs:label ?relLabel }
+                        
+                        # Exclude rdf:type relationships
+                        FILTER(?relation != rdf:type)
+                    }
+                }
+                LIMIT %d
+            """ % (entity_uri, entity_uri, limit)
+            
+            relationships = []
+            try:
+                qres = self.graph.query(sparql_query)
+                
+                for row in qres:
+                    # Extract relationship info
+                    rel_uri = str(row.relation) if hasattr(row, 'relation') else None
+                    rel_label = str(row.relLabel) if hasattr(row, 'relLabel') else None
+                    target_uri = str(row.target) if hasattr(row, 'target') else None
+                    target_name = str(row.targetName) if hasattr(row, 'targetName') else None
+                    target_type = str(row.targetType).split('#')[-1] if hasattr(row, 'targetType') else "unknown"
+                    
+                    if not rel_uri or not target_uri:
+                        continue
+                    
+                    # Use URI fragment as relation type if no label
+                    rel_type = rel_label or rel_uri.split('#')[-1]
+                    
+                    # Extract target ID from URI
+                    target_id = target_uri.split('#')[-1]
+                    
+                    # Add relationship info
+                    relationships.append({
+                        "relation_type": rel_type,
+                        "target_id": target_id,
+                        "target_name": target_name,
+                        "target_type": target_type
+                    })
+                
+                return relationships
+            except Exception as e:
+                logger.error(f"Error getting direct relationships: {e}")
+                return []
+        except Exception as e:
+            logger.error(f"Error building relationship query: {e}")
+            return []
+
+    def get_paths_between_entities(
+        self, source_id: str, target_id: str, max_length: int = 3
+    ) -> List[List[Dict[str, Any]]]:
+        """Find paths between two entities in the knowledge graph.
+        
+        Args:
+            source_id: ID of the source entity
+            target_id: ID of the target entity
+            max_length: Maximum path length to consider
+            
+        Returns:
+            List of paths, where each path is a list of connection dictionaries
+        """
+        source_uri = KBC_ENTITY[source_id]
+        target_uri = KBC_ENTITY[target_id]
+        
+        # Convert to NetworkX graph for pathfinding
+        nx_graph = self.to_networkx()
+        
+        # Find all simple paths between the entities
+        source_node = str(source_uri)
+        target_node = str(target_uri)
+        
+        # Ensure nodes exist in the graph
+        if source_node not in nx_graph or target_node not in nx_graph:
+            return []
+            
+        # Find paths
+        paths = []
+        try:
+            for path in nx.all_simple_paths(nx_graph, source_node, target_node, cutoff=max_length):
+                formatted_path = []
+                
+                # Process each edge in the path
+                for i in range(len(path) - 1):
+                    s_uri = URIRef(path[i])
+                    t_uri = URIRef(path[i + 1])
+                    
+                    # Find the relationship type
+                    rel_type = None
+                    for _, p, _ in self.graph.triples((s_uri, None, t_uri)):
+                        rel_type = str(p).split('#')[-1]
+                        break
+                    
+                    # Get entity names
+                    s_name = None
+                    for _, _, name in self.graph.triples((s_uri, RDFS.label, None)):
+                        s_name = str(name)
+                        break
+                        
+                    t_name = None
+                    for _, _, name in self.graph.triples((t_uri, RDFS.label, None)):
+                        t_name = str(name)
+                        break
+                    
+                    # Add to formatted path
+                    s_id = str(s_uri).split('#')[-1]
+                    t_id = str(t_uri).split('#')[-1]
+                    
+                    formatted_path.append({
+                        'source_id': s_id,
+                        'source_name': s_name,
+                        'target_id': t_id,
+                        'target_name': t_name,
+                        'relationship': rel_type
+                    })
+                
+                paths.append(formatted_path)
+        except nx.NetworkXNoPath:
+            # No path exists
+            pass
+        
+        return paths 

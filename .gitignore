@@ -148,3 +148,5 @@ cursor.rules
 # Migrations (if needed)
 # */migrations/*.py
 # !*/migrations/__init__.py
+ontology_graph.png
+packages/omen-cli/src/ontology_graph.png

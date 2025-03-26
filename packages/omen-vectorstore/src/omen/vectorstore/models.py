@@ -74,10 +74,23 @@ class SearchQuery(BaseModel):
 
 
 class SearchResult(BaseModel):
-    """A search result."""
+    """Result of a search operation."""
     
     document: MetadataDocument = Field(..., description="The matching document")
     score: float = Field(..., description="Search score (0-1)")
+    vector_score: Optional[float] = Field(None, description="Vector similarity score")
+    semantic_score: Optional[float] = Field(None, description="Semantic match score")
+    related_entities: List[Dict[str, Any]] = Field(default_factory=list, description="Related entities from ontology")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "document": self.document.to_dict(),
+            "score": self.score,
+            "vector_score": self.vector_score,
+            "semantic_score": self.semantic_score,
+            "related_entities": self.related_entities,
+        }
     
     class Config:
         arbitrary_types_allowed = True 

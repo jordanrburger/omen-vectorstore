@@ -36,9 +36,9 @@ class LLMClient:
     def __init__(
         self,
         provider: str = "openai",
-        model: str = "gpt-4",
+        model: str = "gpt-4o",
         temperature: float = 0.7,
-        max_tokens: int = 2000,
+        max_tokens: int = 6000,
         api_key: Optional[str] = None,
         **kwargs
     ):
