@@ -5,7 +5,7 @@ Implementation of the Keboola Storage API metadata extractor.
 from typing import Dict, List, Any, Optional, Set
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import requests
 import uuid
@@ -80,9 +80,8 @@ class KeboolaExtractor:
             return {"last_run": None, "processed_tables": set(), "processed_buckets": set()}
 
     def _save_state(self, state: Dict[str, Any]) -> None:
-        """
-        Save state to the state file.
-
+        """Save state to the state file.
+        
         Args:
             state: Dict containing the state
         """
@@ -90,126 +89,101 @@ class KeboolaExtractor:
             # Convert sets to lists for JSON serialization
             serializable_state = state.copy()
             if "processed_tables" in serializable_state:
-                serializable_state["processed_tables"] = list(serializable_state["processed_tables"])
+                serializable_state["processed_tables"] = sorted(list(serializable_state["processed_tables"]))
             if "processed_buckets" in serializable_state:
-                serializable_state["processed_buckets"] = list(serializable_state["processed_buckets"])
-                
+                serializable_state["processed_buckets"] = sorted(list(serializable_state["processed_buckets"]))
+            
             with open(self.state_file, "w") as f:
-                json.dump(serializable_state, f)
+                json.dump(serializable_state, f, indent=2)
         except Exception as e:
             logger.warning(f"Failed to save state: {e}")
 
-    def extract(self, incremental: bool = True) -> List[MetadataDocument]:
-        """
-        Extract metadata from Keboola.
-
-        Args:
-            incremental: If True, only extract metadata that has changed since last run
-
-        Returns:
-            List of MetadataDocument objects
-        """
-        logger.info(f"Starting {'incremental' if incremental else 'full'} extraction")
+    def extract(self, incremental: bool = False) -> List[MetadataDocument]:
+        """Extract metadata from Keboola Storage API.
         
+        Args:
+            incremental: If True, only extract metadata for items that have changed since last run.
+            
+        Returns:
+            List of metadata documents.
+        """
         state = self._load_state() if incremental else {
-            "last_run": None, 
-            "processed_tables": set(), 
-            "processed_buckets": set()
+            "last_run": None,
+            "processed_tables": set(),
+            "processed_buckets": set(),
         }
         
-        # Set current time as last_run for the next state
-        current_time = datetime.utcnow().isoformat()
-        
-        result: List[MetadataDocument] = []
+        documents = []
         
         # Extract bucket metadata
-        buckets = self.extract_buckets(state.get("processed_buckets", set()) if incremental else set())
-        result.extend(buckets)
+        buckets = self.extract_buckets(state["processed_buckets"])
+        documents.extend(buckets)
         
         # Extract table metadata
-        tables = self.extract_tables(state.get("processed_tables", set()) if incremental else set())
-        result.extend(tables)
-        
-        # TODO: Extract component configurations when needed
+        tables = self.extract_tables(state["processed_tables"])
+        documents.extend(tables)
         
         # Update state
-        state["last_run"] = current_time
-        state["processed_buckets"] = set(item.id for item in buckets)
-        state["processed_tables"] = set(item.id for item in tables)
+        if incremental:
+            state["last_run"] = datetime.now(timezone.utc).isoformat()
+            state["processed_buckets"].update(bucket.source.id for bucket in buckets)
+            state["processed_tables"].update(table.source.id for table in tables)
+            self._save_state(state)
         
-        self._save_state(state)
-        
-        logger.info(f"Extraction complete, {len(result)} items extracted")
-        return result
+        return documents
 
     def extract_buckets(self, processed_buckets: Set[str]) -> List[MetadataDocument]:
-        """
-        Extract bucket metadata.
-
+        """Extract metadata for all buckets.
+        
         Args:
-            processed_buckets: Set of bucket IDs that have already been processed
-
-        Returns:
-            List of MetadataDocument objects for buckets
-        """
-        logger.info("Extracting bucket metadata")
-        result = []
-        
-        # Get list of buckets
-        response = requests.get(f"{self.url}/v2/storage/buckets", headers=self.headers)
-        response.raise_for_status()
-        buckets = response.json()
-        
-        for bucket in buckets:
-            bucket_id = bucket["id"]
+            processed_buckets: Set of bucket IDs that have already been processed.
             
-            # Skip if already processed in incremental mode
-            if bucket_id in processed_buckets and bucket["uri"] in processed_buckets:
-                continue
-                
-            # Get bucket detail
-            try:
-                response = requests.get(f"{self.url}/v2/storage/buckets/{bucket_id}", headers=self.headers)
-                response.raise_for_status()
-                detail = response.json()
-                
-                metadata = {
-                    "id": bucket_id,
-                    "name": bucket["name"],
-                    "stage": bucket["stage"],
-                    "description": bucket.get("description", ""),
-                    "created": bucket["created"],
-                    "last_change_date": bucket.get("lastChangeDate"),
-                    "attributes": detail.get("attributes", {}),
-                    "backend": detail.get("backend"),
-                    "sharing": detail.get("sharing"),
-                    "uri": bucket["uri"],
-                }
-                
-                # Create metadata document
-                item = MetadataDocument(
-                    id=str(uuid.uuid4()),
-                    source=MetadataSource(
-                        id=bucket_id,
-                        type=MetadataType.BUCKET,
-                        url=bucket["uri"],
-                        created_at=datetime.fromisoformat(bucket["created"].replace("Z", "+00:00")),
-                        updated_at=datetime.fromisoformat(bucket.get("lastChangeDate", "").replace("Z", "+00:00")) if bucket.get("lastChangeDate") else None,
-                    ),
-                    content=json.dumps(metadata),
-                    metadata={
-                        "stage": bucket["stage"],
-                        "backend": detail.get("backend"),
-                        "sharing": detail.get("sharing"),
-                    },
-                )
-                
-                result.append(item)
-            except Exception as e:
-                logger.error(f"Failed to extract bucket {bucket_id}: {e}")
-        
-        logger.info(f"Extracted {len(result)} buckets")
-        return result
+        Returns:
+            List of metadata documents for buckets.
+        """
+        documents = []
+        try:
+            response = requests.get(f"{self.url}/v2/storage/buckets", headers=self.headers)
+            response.raise_for_status()
+            buckets = response.json()
+            
+            for bucket in buckets:
+                bucket_id = bucket["id"]
+                if bucket_id in processed_buckets:
+                    continue
+                    
+                try:
+                    detail_response = requests.get(
+                        f"{self.url}/v2/storage/buckets/{bucket_id}",
+                        headers=self.headers
+                    )
+                    detail_response.raise_for_status()
+                    detail = detail_response.json()
+                    
+                    documents.append(MetadataDocument(
+                        id=str(uuid.uuid4()),
+                        source=MetadataSource(
+                            id=bucket_id,
+                            type=MetadataType.BUCKET,
+                            url=bucket["uri"],
+                            updated_at=datetime.fromisoformat(bucket["lastChangeDate"].replace("Z", "+00:00")),
+                            created_at=datetime.fromisoformat(bucket["created"].replace("Z", "+00:00")),
+                        ),
+                        content=json.dumps(detail),
+                        metadata={
+                            "stage": bucket["stage"],
+                            "backend": detail.get("backend"),
+                            "sharing": detail.get("sharing", {}),
+                        }
+                    ))
+                except Exception as e:
+                    logger.error(f"Failed to extract bucket {bucket_id}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Failed to extract buckets: {e}")
+            
+        return documents
 
     def _extract_column_metadata(self, column_metadata: Any) -> List[Dict[str, Any]]:
         """
@@ -257,99 +231,98 @@ class KeboolaExtractor:
         return columns
 
     def extract_tables(self, processed_tables: Set[str]) -> List[MetadataDocument]:
-        """
-        Extract table metadata.
-
+        """Extract metadata for all tables.
+        
         Args:
-            processed_tables: Set of table IDs that have already been processed
-
-        Returns:
-            List of MetadataDocument objects for tables
-        """
-        logger.info("Extracting table metadata")
-        result = []
-        
-        # Get list of tables
-        response = requests.get(f"{self.url}/v2/storage/tables", headers=self.headers)
-        response.raise_for_status()
-        tables = response.json()
-        
-        for table in tables:
-            table_id = table["id"]
+            processed_tables: Set of table IDs that have already been processed.
             
-            # Skip if already processed in incremental mode
-            if table_id in processed_tables and table["uri"] in processed_tables:
-                continue
-                
-            # Get table detail
-            try:
-                response = requests.get(f"{self.url}/v2/storage/tables/{table_id}", headers=self.headers)
-                response.raise_for_status()
-                detail = response.json()
-                
-                # Handle different response formats
-                if isinstance(detail, list):
-                    # If detail is a list, use the first item
-                    if not detail:
-                        logger.warning(f"Empty detail response for table {table_id}")
-                        continue
-                    detail = detail[0]
-                elif not isinstance(detail, dict):
-                    logger.warning(f"Unexpected detail response type for table {table_id}: {type(detail)}")
+        Returns:
+            List of metadata documents for tables.
+        """
+        documents = []
+        try:
+            response = requests.get(f"{self.url}/v2/storage/tables", headers=self.headers)
+            response.raise_for_status()
+            tables = response.json()
+            
+            for table in tables:
+                table_id = table["id"]
+                if table_id in processed_tables:
                     continue
-                
-                # Extract column metadata
-                columns = self._extract_column_metadata(detail.get("columnMetadata", {}))
-                
-                # Create structured metadata
-                metadata = {
-                    "id": table_id,
-                    "name": table["name"],
-                    "bucket": {
-                        "id": table["bucket"]["id"],
-                        "name": table["bucket"]["name"],
-                        "stage": table["bucket"]["stage"],
-                        "uri": table["bucket"]["uri"],
-                    },
-                    "primaryKey": detail.get("primaryKey", []),
-                    "created": table["created"],
-                    "lastImportDate": table.get("lastImportDate"),
-                    "lastChangeDate": table.get("lastChangeDate"),
-                    "rowsCount": detail.get("rowsCount", 0),
-                    "dataSizeBytes": detail.get("dataSizeBytes", 0),
-                    "columns": columns,
-                    "attributes": detail.get("attributes", {}),
-                    "uri": table["uri"],
-                    "definition": {
-                        "backend": detail.get("definition", {}).get("backend", ""),
-                        "dataStorage": detail.get("dataStorage", {}).get("backend", ""),
-                        "type": detail.get("definition", {}).get("type", ""),
-                    },
-                }
-                
-                # Create metadata document
-                item = MetadataDocument(
-                    id=str(uuid.uuid4()),
-                    source=MetadataSource(
-                        id=table_id,
-                        type=MetadataType.TABLE,
-                        url=table["uri"],
-                        created_at=datetime.fromisoformat(table["created"].replace("Z", "+00:00")),
-                        updated_at=datetime.fromisoformat(table.get("lastChangeDate", "").replace("Z", "+00:00")) if table.get("lastChangeDate") else None,
-                    ),
-                    content=json.dumps(metadata),
-                    metadata={
-                        "bucket_id": table["bucket"]["id"],
-                        "bucket_name": table["bucket"]["name"],
-                        "rows_count": str(detail.get("rowsCount", 0)),
-                        "columns_count": str(len(columns)),
-                        "data_size_bytes": str(detail.get("dataSizeBytes", 0)),
-                    },
-                )
-                
-                result.append(item)
-            except Exception as e:
-                logger.error(f"Failed to extract table {table_id}: {e}")
-        
-        logger.info(f"Extracted {len(result)} tables")
-        return result 
+                    
+                try:
+                    detail_response = requests.get(
+                        f"{self.url}/v2/storage/tables/{table_id}",
+                        headers=self.headers
+                    )
+                    detail_response.raise_for_status()
+                    detail = detail_response.json()
+                    
+                    # Handle both list and dictionary responses
+                    if isinstance(detail, list):
+                        if not detail:
+                            logger.warning(f"Empty detail response for table {table_id}")
+                            continue
+                        detail = detail[0]
+                    elif not isinstance(detail, dict):
+                        logger.warning(f"Unexpected response type for table {table_id}: {type(detail)}")
+                        continue
+                    
+                    # Extract column metadata
+                    columns = []
+                    column_metadata = detail.get("columnMetadata", {})
+                    if isinstance(column_metadata, dict):
+                        for col_name, col_info in column_metadata.items():
+                            columns.append({
+                                "name": col_name,
+                                "type": col_info.get("type"),
+                                "nullable": col_info.get("nullable"),
+                                "length": col_info.get("length"),
+                                "default": col_info.get("default"),
+                                "format": col_info.get("format"),
+                                "description": col_info.get("description"),
+                                "basetype": col_info.get("basetype"),
+                            })
+                    elif isinstance(column_metadata, list):
+                        for col_info in column_metadata:
+                            columns.append({
+                                "name": col_info.get("name"),
+                                "type": col_info.get("type"),
+                                "nullable": col_info.get("nullable"),
+                                "length": col_info.get("length"),
+                                "default": col_info.get("default"),
+                                "format": col_info.get("format"),
+                                "description": col_info.get("description"),
+                                "basetype": col_info.get("basetype"),
+                            })
+                    
+                    # Create table document
+                    documents.append(MetadataDocument(
+                        id=str(uuid.uuid4()),
+                        source=MetadataSource(
+                            id=table_id,
+                            type=MetadataType.TABLE,
+                            url=table["uri"],
+                            updated_at=datetime.fromisoformat(table["lastChangeDate"].replace("Z", "+00:00")),
+                            created_at=datetime.fromisoformat(table["created"].replace("Z", "+00:00")),
+                        ),
+                        content=json.dumps({
+                            **detail,
+                            "columns": columns,
+                        }),
+                        metadata={
+                            "bucket_id": table["bucket"]["id"],
+                            "bucket_name": table["bucket"]["name"],
+                            "rows_count": str(detail.get("rowsCount", 0)),
+                            "columns_count": str(len(columns)),
+                            "data_size_bytes": str(detail.get("dataSizeBytes", 0)),
+                        }
+                    ))
+                except Exception as e:
+                    logger.error(f"Failed to extract table {table_id}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Failed to extract tables: {e}")
+            
+        return documents 
