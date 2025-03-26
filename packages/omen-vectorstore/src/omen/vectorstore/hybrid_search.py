@@ -44,83 +44,175 @@ class HybridSearch:
     
     def search(
         self,
-        query: Union[str, SearchQuery],
+        query: str,
+        vector_weight: float = 0.7,
+        semantic_weight: float = 0.3,
         limit: int = 10,
-        offset: int = 0,
-        type_filter: Optional[List[MetadataType]] = None,
-        metadata_filter: Optional[Dict[str, Any]] = None,
-        vector_weight: Optional[float] = None,
-        semantic_weight: Optional[float] = None,
-        include_related: bool = False,
-        max_related_depth: int = 1,
+        filter_by_metadata_type: Optional[List[str]] = None,
+        include_related_entities: bool = False,
+        max_depth: int = 1,
+        contextual_boost: bool = True, 
+        use_query_expansion: bool = True
     ) -> List[SearchResult]:
-        """Perform hybrid search using both vector similarity and semantic knowledge graph.
+        """Perform a hybrid search combining vector and semantic search.
         
         Args:
-            query: The search query text or SearchQuery object
+            query: Search query
+            vector_weight: Weight for vector search results (0.0 to 1.0)
+            semantic_weight: Weight for semantic search results (0.0 to 1.0)
             limit: Maximum number of results to return
-            offset: Offset for pagination
-            type_filter: Filter results by metadata type
-            metadata_filter: Filter results by metadata fields
-            vector_weight: Weight of vector search results (0-1, overrides instance setting)
-            semantic_weight: Weight of semantic search results (0-1, overrides instance setting)
-            include_related: Whether to include semantically related documents in results
-            max_related_depth: Maximum depth for finding related entities
+            filter_by_metadata_type: Filter results by metadata type
+            include_related_entities: Whether to include related entities from the ontology
+            max_depth: Maximum depth for related entities search
+            contextual_boost: Whether to boost scores based on relationship context
+            use_query_expansion: Whether to expand the search query with semantic variants
             
         Returns:
-            List of search results with combined scores
+            Hybrid search results
         """
-        # Handle search query
-        query_text = query if isinstance(query, str) else query.query
-        
-        # Set weights for this search
-        v_weight = vector_weight if vector_weight is not None else self.vector_weight
-        s_weight = semantic_weight if semantic_weight is not None else self.semantic_weight
-        
         # Normalize weights
-        total_weight = v_weight + s_weight
-        v_weight = v_weight / total_weight
-        s_weight = s_weight / total_weight
+        total = vector_weight + semantic_weight
+        if total == 0:
+            total = 1.0
+        vector_weight = vector_weight / total
+        semantic_weight = semantic_weight / total
         
-        # Perform vector search
+        # Expand query if requested
+        expanded_query = query
+        if use_query_expansion and semantic_weight > 0 and self.ontology_manager:
+            try:
+                expanded_query = self._expand_query(query)
+                logger.info(f"Expanded query from '{query}' to '{expanded_query}'")
+            except Exception as e:
+                logger.error(f"Error expanding query: {e}")
+        
+        # Convert string types to MetadataType if needed
+        type_filter = None
+        if filter_by_metadata_type:
+            from omen.vectorstore.models import MetadataType
+            type_filter = []
+            for type_str in filter_by_metadata_type:
+                try:
+                    type_filter.append(MetadataType(type_str))
+                except ValueError:
+                    logger.warning(f"Invalid metadata type: {type_str}")
+        
+        # Get vector search results
         vector_results = self.vector_search.search(
-            query=query,
-            limit=limit * 2,  # Get more results for better hybrid ranking
-            offset=offset,
-            type_filter=type_filter,
-            metadata_filter=metadata_filter,
+            query=expanded_query, 
+            limit=limit * 2,
+            type_filter=type_filter
         )
         
-        # Extract entity types from type_filter
-        entity_types = None
-        if type_filter:
-            entity_types = [t.value.lower() for t in type_filter]
+        # Convert to dict for efficient lookup
+        vector_result_dict = {result.document.id: result for result in vector_results if result.document}
         
-        # Perform semantic search on the ontology
-        semantic_results = self.ontology_manager.triple_store.semantic_search(
-            query=query_text,
-            limit=limit * 2,  # Get more results for better hybrid ranking
-            entity_types=entity_types,
-        )
+        # Initialize semantic results
+        semantic_results = []
+        semantic_result_dict = {}
+        
+        # Only perform semantic search if weight > 0 and we have an ontology
+        if semantic_weight > 0 and self.ontology_manager:
+            try:
+                # Get semantic search results from the ontology
+                semantic_hits = []  # Initialize as empty list first
+                try:
+                    semantic_hits = self.ontology_manager.triple_store.semantic_search(
+                        query=query,
+                        limit=limit * 2
+                    ) or []  # Ensure it returns an empty list if None is returned
+                except Exception as se:
+                    logger.error(f"Error executing SPARQL query: {se}")
+                    semantic_hits = []  # Use empty list on error
+                
+                if not semantic_hits:
+                    logger.info("Semantic search returned no results, using vector search only")
+                
+                # Convert to SearchResult objects
+                for hit in semantic_hits:
+                    entity_id = hit.get("id")
+                    entity_type = hit.get("type")
+                    entity_score = hit.get("score", 0.0)
+                    relationships = hit.get("relationships", [])
+                    
+                    if not entity_id:
+                        continue
+                    
+                    # Find corresponding document in vector store
+                    doc = self._get_document_for_entity(entity_id)
+                    if not doc:
+                        continue
+                        
+                    # Apply contextual boosting if enabled
+                    if contextual_boost and relationships:
+                        # Boost score based on relationship count and relevance
+                        relationship_boost = min(0.3, 0.05 * len(relationships))
+                        entity_score += relationship_boost
+                        
+                    # Create search result with semantic score
+                    result = SearchResult(
+                        document=doc,
+                        score=entity_score,
+                        vector_score=0.0,
+                        semantic_score=entity_score,
+                        relationships=relationships
+                    )
+                    
+                    semantic_results.append(result)
+                    semantic_result_dict[doc.id] = result
+            except Exception as e:
+                logger.error(f"Error in semantic search, falling back to vector search only: {e}")
+                semantic_results = []
         
         # Combine results
-        combined_results = self._combine_results(
-            vector_results=vector_results,
-            semantic_results=semantic_results,
-            vector_weight=v_weight,
-            semantic_weight=s_weight,
-            limit=limit,
-        )
+        combined_results = {}
         
-        # Include related entities if requested
-        if include_related and combined_results:
-            combined_results = self._include_related_entities(
-                combined_results,
-                max_depth=max_related_depth,
-                limit=limit
+        # Add vector results with their scores
+        for doc_id, result in vector_result_dict.items():
+            combined_results[doc_id] = SearchResult(
+                document=result.document,
+                score=result.score * vector_weight,
+                vector_score=result.score,
+                semantic_score=0.0
             )
         
-        return combined_results
+        # Add or update with semantic results
+        for result in semantic_results:
+            doc_id = result.document.id
+            if doc_id in combined_results:
+                # Document exists in vector results - update score
+                existing = combined_results[doc_id]
+                combined_results[doc_id] = SearchResult(
+                    document=existing.document,
+                    score=existing.vector_score * vector_weight + result.score * semantic_weight,
+                    vector_score=existing.vector_score,
+                    semantic_score=result.score,
+                    relationships=result.relationships
+                )
+            else:
+                # New document from semantic search
+                combined_results[doc_id] = SearchResult(
+                    document=result.document,
+                    score=result.score * semantic_weight,
+                    vector_score=0.0,
+                    semantic_score=result.score,
+                    relationships=result.relationships
+                )
+        
+        # Convert dict to list and sort by score
+        results = list(combined_results.values())
+        results.sort(key=lambda x: x.score, reverse=True)
+        
+        # Include related entities if requested
+        if include_related_entities and self.ontology_manager:
+            results = self._include_related_entities(
+                results=results[:limit],
+                max_depth=max_depth,
+                limit=limit
+            )
+            
+        # Return limited results
+        return results[:limit]
     
     def _combine_results(
         self,
@@ -204,37 +296,85 @@ class HybridSearch:
         max_depth: int = 1,
         limit: int = 10,
     ) -> List[SearchResult]:
-        """Include semantically related entities in search results.
+        """Include related entities from the knowledge graph.
         
         Args:
             results: Search results to enhance
-            max_depth: Maximum relationship depth to traverse
-            limit: Maximum number of final results to return
+            max_depth: Maximum depth for related entities
+            limit: Maximum number of final results
             
         Returns:
-            Enhanced search results with related entities
+            Enhanced search results
         """
-        enhanced_results = []
-        
-        for result in results:
-            # Find corresponding entity in the ontology
-            entity_id = self._get_entity_for_document(result.document)
-            if not entity_id:
-                enhanced_results.append(result)
-                continue
+        if not results:
+            return []
             
-            # Get related entities
-            related_entities = self.ontology_manager.triple_store.get_related_entities(
-                entity_id=entity_id,
-                max_depth=max_depth,
-            )
+        try:
+            # Process each search result
+            for result in results:
+                # Skip if no document
+                if not result.document:
+                    continue
+                    
+                doc_id = result.document.id
+                
+                # Get entity ID based on document type
+                if hasattr(result.document, 'metadata') and result.document.metadata.get('entity_id'):
+                    # If entity_id is directly available in metadata
+                    entity_id = result.document.metadata.get('entity_id')
+                elif hasattr(result.document.source, 'id') and hasattr(result.document.source, 'type'):
+                    # Construct entity ID from source type and ID
+                    entity_id = f"{result.document.source.type.value}-{result.document.source.id}"
+                else:
+                    # Skip if can't determine entity
+                    continue
+                
+                # Check if entity exists in ontology
+                if not self.ontology_manager.entity_exists(entity_id):
+                    continue
+                
+                # Get related entities with path information
+                try:
+                    related = self.ontology_manager.get_related_entities(
+                        entity_id=entity_id,
+                        max_depth=max_depth
+                    )
+                    
+                    # Skip if no related entities
+                    if not related:
+                        continue
+                        
+                    # Format related entities
+                    related_entities = []
+                    for rel in related:
+                        try:
+                            target_entity = self.ontology_manager.get_entity(rel["target_id"])
+                            if not target_entity:
+                                continue
+                                
+                            related_entities.append({
+                                "target_id": rel["target_id"],
+                                "target_name": target_entity.name,
+                                "target_type": target_entity.type.value,
+                                "relationship": rel["relationship"],
+                                "direction": rel["direction"],
+                                "path_length": rel["path_length"],
+                                "path": rel.get("path", [])
+                            })
+                        except Exception as inner_e:
+                            logger.error(f"Error formatting related entity {rel.get('target_id', 'unknown')}: {inner_e}")
+                            continue
+                    
+                    # Add to result
+                    result.related_entities = related_entities
+                except Exception as e:
+                    logger.error(f"Error getting related entities for {entity_id}: {e}")
+                    continue
             
-            # Add related entities to the result
-            result.related_entities = related_entities
-            enhanced_results.append(result)
-        
-        # Return limited results
-        return enhanced_results[:limit]
+            return results
+        except Exception as e:
+            logger.error(f"Error including related entities: {e}")
+            return results  # Return original results on error
     
     def _get_document_for_entity(self, entity_id: str) -> Optional[MetadataDocument]:
         """Find the corresponding document for an entity.
@@ -453,4 +593,61 @@ class HybridSearch:
                 "relationship_path": result["relationship_path"],
             })
         
-        return formatted_results 
+        return formatted_results
+
+    def _expand_query(self, query: str) -> str:
+        """Expand the search query with semantic variants.
+        
+        This method uses the ontology to find related terms and synonyms
+        to expand the original query for better search results.
+        
+        Args:
+            query: Original search query
+            
+        Returns:
+            Expanded search query
+        """
+        if not self.ontology_manager:
+            return query
+            
+        # Clean the query
+        clean_query = query.lower().strip()
+        
+        # Check if we have any semantic expansion terms from the ontology
+        try:
+            # Use SPARQL to find related terms in the ontology
+            expansion_terms = set()
+            
+            # Try to find entity names that match the query
+            sparql_query = """
+                PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                
+                SELECT DISTINCT ?name
+                WHERE {
+                    ?entity rdfs:label ?name .
+                    FILTER(CONTAINS(LCASE(?name), "%s"))
+                }
+                LIMIT 5
+            """ % clean_query
+            
+            try:
+                results = self.ontology_manager.triple_store.query_sparql(sparql_query) or []
+                for result in results:
+                    if "name" in result:
+                        name = result["name"]
+                        # Add significant terms from the name
+                        for term in name.split():
+                            if len(term) > 3 and term.lower() != clean_query:
+                                expansion_terms.add(term.lower())
+            except Exception as e:
+                logger.warning(f"Error finding entity names for query expansion: {e}")
+                
+            # If we found any expansion terms, add them to the query
+            if expansion_terms:
+                expanded_query = clean_query + " " + " ".join(expansion_terms)
+                return expanded_query
+                
+        except Exception as e:
+            logger.error(f"Error during query expansion: {e}")
+            
+        return query 

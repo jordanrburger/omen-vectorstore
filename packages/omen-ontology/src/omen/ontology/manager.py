@@ -349,4 +349,40 @@ class OntologyManager:
             self.triple_store.add_entity(entity)
             
         for relationship in self.relationships.values():
-            self.triple_store.add_relationship(relationship) 
+            self.triple_store.add_relationship(relationship)
+    
+    def relationship_exists(
+        self, source_id: str, target_id: str, relationship_type: str
+    ) -> bool:
+        """
+        Check if a relationship exists between two entities.
+        
+        Args:
+            source_id: ID of the source entity
+            target_id: ID of the target entity
+            relationship_type: Type of the relationship
+            
+        Returns:
+            True if the relationship exists, False otherwise
+        """
+        for rel in self.relationships.values():
+            if (rel.source_id == source_id and 
+                rel.target_id == target_id and 
+                rel.type.value == relationship_type):
+                return True
+        return False
+    
+    def get_related_entities(
+        self, entity_id: str, max_depth: int = 2
+    ) -> List[Dict[str, Any]]:
+        """
+        Get entities related to the specified entity up to a certain path depth.
+        
+        Args:
+            entity_id: ID of the entity
+            max_depth: Maximum path length to explore
+            
+        Returns:
+            List of related entity dictionaries with relationship information
+        """
+        return self.triple_store.get_related_entities(entity_id, max_depth) 

@@ -111,6 +111,7 @@ class QdrantIndexer:
         self, 
         document: MetadataDocument,
         embedding_provider: Optional[EmbeddingProvider] = None,
+        max_content_length: int = 8000,  # Limit document content size
     ) -> str:
         """
         Index a single document with its embedding.
@@ -118,6 +119,7 @@ class QdrantIndexer:
         Args:
             document: The document to index
             embedding_provider: Provider for generating embeddings
+            max_content_length: Maximum length for document content
             
         Returns:
             String ID of the indexed document
@@ -125,8 +127,19 @@ class QdrantIndexer:
         if embedding_provider is None:
             embedding_provider = get_embedding_provider()
         
+        # Truncate document content if needed
+        content = document.content
+        if len(content) > max_content_length:
+            logger.warning(f"Document content is too large ({len(content)} chars), truncating to {max_content_length} chars")
+            content = content[:max_content_length]
+            
+            # Create a copy of the document with truncated content
+            doc_copy = document.model_copy()
+            doc_copy.content = content
+            document = doc_copy
+        
         # Generate embedding for the document content
-        embeddings = embedding_provider.embed([document.content])
+        embeddings = embedding_provider.embed([content])
         logger.debug(f"Generated embeddings with shape: {len(embeddings)}x{len(embeddings[0])}")
         
         # Create point
@@ -161,6 +174,7 @@ class QdrantIndexer:
         documents: List[MetadataDocument],
         embedding_provider: Optional[EmbeddingProvider] = None,
         batch_size: Optional[int] = None,
+        max_content_length: int = 8000,  # Limit document content size
     ) -> List[str]:
         """
         Index multiple documents with their embeddings.
@@ -169,6 +183,7 @@ class QdrantIndexer:
             documents: List of documents to index
             embedding_provider: Provider for generating embeddings
             batch_size: Size of batches for processing
+            max_content_length: Maximum length for document content
             
         Returns:
             List of indexed document IDs
@@ -183,7 +198,7 @@ class QdrantIndexer:
         results = batch_processor.process(
             items=documents,
             process_fn=lambda doc: self._process_document_batch(
-                [doc], embedding_provider
+                [doc], embedding_provider, max_content_length
             ),
             desc=f"Indexing {len(documents)} documents",
             show_progress=True
@@ -200,14 +215,31 @@ class QdrantIndexer:
     def _process_document_batch(
         self, 
         documents: List[MetadataDocument],
-        embedding_provider: EmbeddingProvider
+        embedding_provider: EmbeddingProvider,
+        max_content_length: int = 8000,
     ) -> List[str]:
         """Process a batch of documents."""
         if not documents:
             return []
         
-        # Extract contents for embedding
-        contents = [doc.content for doc in documents]
+        # Prepare documents with truncated content if needed
+        processed_docs = []
+        contents = []
+        
+        for doc in documents:
+            content = doc.content
+            if len(content) > max_content_length:
+                logger.warning(f"Document content is too large ({len(content)} chars), truncating to {max_content_length} chars")
+                content = content[:max_content_length]
+                
+                # Create a copy of the document with truncated content
+                doc_copy = doc.model_copy()
+                doc_copy.content = content
+                processed_docs.append(doc_copy)
+            else:
+                processed_docs.append(doc)
+                
+            contents.append(content)
         
         # Generate embeddings
         embeddings = embedding_provider.embed(contents)
@@ -219,7 +251,7 @@ class QdrantIndexer:
                 vector=embedding,
                 payload=doc.to_payload()
             )
-            for doc, embedding in zip(documents, embeddings)
+            for doc, embedding in zip(processed_docs, embeddings)
         ]
         
         # Upsert points
@@ -231,14 +263,14 @@ class QdrantIndexer:
             )
             
             # Mark documents as indexed
-            for doc in documents:
+            for doc in processed_docs:
                 state_manager.mark_indexed(
                     item_type=doc.source.type.value,
                     item_id=doc.source.id,
                     metadata={"document_id": doc.id}
                 )
             
-            return [doc.id for doc in documents]
+            return [doc.id for doc in processed_docs]
         except Exception as e:
             logger.error(f"Error indexing document batch: {e}")
             raise
