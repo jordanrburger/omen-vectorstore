@@ -40,6 +40,63 @@ class QdrantIndexer:
             https=False  # Disable HTTPS for local connections
         )
         self.ensure_collection()
+        self.indexed_source_ids = self._load_indexed_source_ids()
+        
+    def _load_indexed_source_ids(self) -> Dict[str, Dict[str, str]]:
+        """
+        Load a mapping of already indexed source IDs to document IDs.
+        This helps prevent duplicate documents when indexing.
+        
+        Returns:
+            Dictionary mapping source type and ID to document ID
+        """
+        indexed_ids = {}
+        try:
+            # Query for all documents in the collection
+            scroll_results = self.client.scroll(
+                collection_name=self.collection_name,
+                with_payload=True,
+                limit=1000,  # Process in batches
+            )
+            
+            total_found = 0
+            while scroll_results[0]:
+                batch, next_offset = scroll_results
+                
+                for point in batch:
+                    if (not hasattr(point, 'payload') or 
+                        not point.payload or 
+                        'source' not in point.payload):
+                        continue
+                        
+                    source = point.payload.get('source', {})
+                    source_type = source.get('type')
+                    source_id = source.get('id')
+                    project_id = source.get('project_id')
+                    
+                    if source_type and source_id:
+                        # Create a compound key with project_id to allow same ID in different projects
+                        project_prefix = f"{project_id}_" if project_id else ""
+                        key = f"{source_type}_{project_prefix}{source_id}"
+                        indexed_ids[key] = str(point.id)
+                        total_found += 1
+                
+                if not next_offset:
+                    break
+                    
+                # Get next batch
+                scroll_results = self.client.scroll(
+                    collection_name=self.collection_name,
+                    with_payload=True,
+                    limit=1000,
+                    offset=next_offset
+                )
+                
+            logger.info(f"Loaded {total_found} indexed source IDs from collection {self.collection_name}")
+        except Exception as e:
+            logger.error(f"Error loading indexed source IDs: {e}")
+        
+        return indexed_ids
 
     def ensure_collection(self) -> None:
         """Ensure the collection exists, creating it if necessary."""
@@ -102,6 +159,19 @@ class QdrantIndexer:
                 field_schema=models.PayloadSchemaType.KEYWORD
             )
             
+            # Additional indexes for common metadata fields
+            self.client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="metadata.bucket_id",
+                field_schema=models.PayloadSchemaType.KEYWORD
+            )
+            
+            self.client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="metadata.project_id",
+                field_schema=models.PayloadSchemaType.KEYWORD
+            )
+            
             logger.info(f"Created payload indexes for collection {self.collection_name}")
         except Exception as e:
             logger.error(f"Error creating payload indexes: {e}")
@@ -126,6 +196,22 @@ class QdrantIndexer:
         """
         if embedding_provider is None:
             embedding_provider = get_embedding_provider()
+        
+        # Check if this document's source is already indexed
+        source_type = document.source.type.value
+        source_id = document.source.id
+        project_id = document.source.project_id or ""
+        
+        # Create a compound key with project_id to allow same ID in different projects
+        project_prefix = f"{project_id}_" if project_id else ""
+        compound_key = f"{source_type}_{project_prefix}{source_id}"
+        
+        # If already indexed, use the existing document ID to update it
+        if compound_key in self.indexed_source_ids:
+            document.id = self.indexed_source_ids[compound_key]
+            logger.debug(f"Updating existing document {document.id} for source {source_type}/{source_id} in project {project_id}")
+        else:
+            logger.debug(f"Creating new document for source {source_type}/{source_id} in project {project_id}")
         
         # Truncate document content if needed
         content = document.content
@@ -157,11 +243,18 @@ class QdrantIndexer:
                 wait=True
             )
             
+            # Update our in-memory tracking
+            self.indexed_source_ids[compound_key] = document.id
+            
             # Mark as indexed in state manager
             state_manager.mark_indexed(
                 item_type=document.source.type.value, 
                 item_id=document.source.id,
-                metadata={"document_id": document.id}
+                metadata={
+                    "document_id": document.id,
+                    "project_id": project_id,
+                    "collection": self.collection_name
+                }
             )
             
             return document.id
@@ -194,6 +287,20 @@ class QdrantIndexer:
         if embedding_provider is None:
             embedding_provider = get_embedding_provider()
         
+        # Pre-process documents to check for duplicates and assign IDs 
+        for doc in documents:
+            source_type = doc.source.type.value
+            source_id = doc.source.id
+            project_id = doc.source.project_id or ""
+            
+            # Create a compound key with project_id to allow same ID in different projects
+            project_prefix = f"{project_id}_" if project_id else ""
+            compound_key = f"{source_type}_{project_prefix}{source_id}"
+            
+            # If already indexed, use the existing document ID to update it
+            if compound_key in self.indexed_source_ids:
+                doc.id = self.indexed_source_ids[compound_key]
+        
         # Process in batches
         results = batch_processor.process(
             items=documents,
@@ -209,6 +316,14 @@ class QdrantIndexer:
         for doc, result, error in results:
             if error is None and result:
                 document_ids.extend(result)
+                
+                # Update our in-memory tracking
+                source_type = doc.source.type.value
+                source_id = doc.source.id
+                project_id = doc.source.project_id or ""
+                project_prefix = f"{project_id}_" if project_id else ""
+                compound_key = f"{source_type}_{project_prefix}{source_id}"
+                self.indexed_source_ids[compound_key] = doc.id
         
         return document_ids
 
@@ -267,7 +382,11 @@ class QdrantIndexer:
                 state_manager.mark_indexed(
                     item_type=doc.source.type.value,
                     item_id=doc.source.id,
-                    metadata={"document_id": doc.id}
+                    metadata={
+                        "document_id": doc.id,
+                        "project_id": doc.source.project_id,
+                        "collection": self.collection_name
+                    }
                 )
             
             return [doc.id for doc in processed_docs]
@@ -310,12 +429,30 @@ class QdrantIndexer:
             # Add metadata filter if provided
             if search_query.filter:
                 for key, value in search_query.filter.items():
-                    filter_conditions.append(
-                        models.FieldCondition(
-                            key=key,
-                            match=models.MatchValue(value=value)
+                    if key.startswith('metadata.'):
+                        # Direct filter on metadata fields
+                        filter_conditions.append(
+                            models.FieldCondition(
+                                key=key,
+                                match=models.MatchValue(value=value)
+                            )
                         )
-                    )
+                    elif key == 'project_id':
+                        # Special handling for project_id
+                        filter_conditions.append(
+                            models.FieldCondition(
+                                key="source.project_id",
+                                match=models.MatchValue(value=value)
+                            )
+                        )
+                    else:
+                        # Default placement under metadata
+                        filter_conditions.append(
+                            models.FieldCondition(
+                                key=f"metadata.{key}",
+                                match=models.MatchValue(value=value)
+                            )
+                        )
             
             # Add type filter if provided
             if search_query.type_filter:
@@ -377,7 +514,76 @@ class QdrantIndexer:
                 ),
                 wait=True
             )
+            
+            # Update in-memory tracking by finding and removing
+            # the entry for this document ID
+            to_remove = []
+            for compound_key in self.indexed_source_ids.keys():
+                if self.indexed_source_ids[compound_key] == document_id:
+                    to_remove.append(compound_key)
+            
+            for key in to_remove:
+                del self.indexed_source_ids[key]
+                
             return True
         except Exception as e:
             logger.error(f"Error deleting document: {e}")
-            return False 
+            return False
+
+    def delete_project_documents(self, project_id: str) -> int:
+        """
+        Delete all documents belonging to a specific project.
+        
+        Args:
+            project_id: Project ID to delete documents for
+            
+        Returns:
+            Number of documents deleted
+        """
+        try:
+            # Create filter for documents with this project ID
+            search_filter = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="source.project_id",
+                        match=models.MatchValue(value=project_id)
+                    )
+                ]
+            )
+            
+            # Count documents to delete
+            count_result = self.client.count(
+                collection_name=self.collection_name,
+                count_filter=search_filter
+            )
+            doc_count = count_result.count
+            
+            if doc_count == 0:
+                logger.info(f"No documents found for project {project_id}")
+                return 0
+                
+            logger.info(f"Deleting {doc_count} documents for project {project_id}")
+            
+            # Delete documents
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=models.FilterSelector(
+                    filter=search_filter
+                ),
+                wait=True
+            )
+            
+            # Update in-memory tracking by finding and removing
+            # entries for this project
+            to_remove = []
+            for compound_key in self.indexed_source_ids.keys():
+                if f"{project_id}_" in compound_key:
+                    to_remove.append(compound_key)
+            
+            for key in to_remove:
+                del self.indexed_source_ids[key]
+                
+            return doc_count
+        except Exception as e:
+            logger.error(f"Error deleting project documents: {e}")
+            return 0 

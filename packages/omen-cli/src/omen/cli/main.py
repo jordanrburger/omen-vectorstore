@@ -49,10 +49,45 @@ def ontology():
 
 
 @ontology.command('stats')
-def ontology_stats():
+@click.option('--project-id', '-p', help='Show statistics for a specific project')
+@click.option('--list-projects', '-l', is_flag=True, help='List all available project ontologies')
+def ontology_stats(project_id, list_projects):
     """Show statistics about the ontology."""
     try:
-        ontology_manager = initialize_ontology_manager()
+        # List all available project ontologies if requested
+        if list_projects:
+            base_ontology_path = Path("state/ontology")
+            project_dirs = [d for d in os.listdir(base_ontology_path) 
+                           if os.path.isdir(os.path.join(base_ontology_path, d))]
+            
+            if not project_dirs:
+                console.print("[yellow]No project-specific ontologies found[/yellow]")
+                return
+            
+            table = Table(title="Available Project Ontologies")
+            table.add_column("Project ID", style="bold")
+            table.add_column("Entity Count")
+            
+            for project_dir in project_dirs:
+                try:
+                    project_path = base_ontology_path / project_dir
+                    if os.path.exists(project_path / "entities.json"):
+                        temp_manager = OntologyManager(state_dir=project_path)
+                        temp_manager.load_state()
+                        table.add_row(project_dir, str(len(temp_manager.entities)))
+                except Exception as e:
+                    table.add_row(project_dir, f"Error: {e}")
+            
+            console.print(table)
+            return
+        
+        # Initialize the ontology manager with the specified project ID
+        ontology_manager = initialize_ontology_manager(project_id)
+        
+        # Determine which project we're showing stats for
+        project_label = f"project '{project_id}'" if project_id else "project with most entities"
+        if project_id is None and len(ontology_manager.entities) == 0:
+            project_label = "main ontology (empty)"
         
         # Get statistics
         entity_count = len(ontology_manager.entities)
@@ -76,7 +111,7 @@ def ontology_stats():
             relationship_types[rel_type] += 1
         
         # Display statistics
-        table = Table(title="Ontology Statistics")
+        table = Table(title=f"Ontology Statistics for {project_label}")
         table.add_column("Metric", style="bold")
         table.add_column("Value")
         
@@ -97,22 +132,63 @@ def ontology_stats():
         console.print(table)
     except Exception as e:
         console.print(f"[bold red]Error getting ontology statistics: {e}[/bold red]")
+        import traceback
+        console.print(traceback.format_exc())
         sys.exit(1)
 
 
 @ontology.command('clear')
+@click.option('--project-id', '-p', help='Clear ontology for a specific project')
+@click.option('--all-projects', '-a', is_flag=True, help='Clear ontology for all projects')
 @click.confirmation_option(prompt='Are you sure you want to clear the ontology?')
-def ontology_clear():
-    """Clear all ontology data."""
+def ontology_clear(project_id, all_projects):
+    """Clear all ontology data or data for a specific project."""
     try:
-        # Ensure ontology directory exists
-        ontology_path = Path("state/ontology")
-        os.makedirs(ontology_path, exist_ok=True)
+        # Base ontology path
+        base_ontology_path = Path("state/ontology")
         
-        manager = OntologyManager(state_dir=ontology_path)
-        manager.clear()
-        manager.save_state()
-        console.print("[bold green]Ontology cleared successfully[/bold green]")
+        # If all-projects flag is set
+        if all_projects:
+            # Get all project directories
+            project_dirs = [d for d in os.listdir(base_ontology_path) 
+                           if os.path.isdir(os.path.join(base_ontology_path, d))]
+            
+            # Clear each project directory
+            for project_dir in project_dirs:
+                project_path = base_ontology_path / project_dir
+                try:
+                    manager = OntologyManager(state_dir=project_path)
+                    manager.clear()
+                    manager.save_state()
+                    console.print(f"[green]Cleared ontology for project: {project_dir}[/green]")
+                except Exception as e:
+                    console.print(f"[red]Error clearing ontology for project {project_dir}: {e}[/red]")
+            
+            # Also clear the base ontology
+            manager = OntologyManager(state_dir=base_ontology_path)
+            manager.clear()
+            manager.save_state()
+            console.print("[green]Cleared base ontology[/green]")
+            
+            return
+        
+        # Clear a specific project or the base ontology
+        if project_id:
+            project_path = base_ontology_path / project_id
+            if not os.path.exists(project_path):
+                console.print(f"[yellow]Project directory {project_id} does not exist[/yellow]")
+                return
+                
+            manager = OntologyManager(state_dir=project_path)
+            manager.clear()
+            manager.save_state()
+            console.print(f"[bold green]Ontology cleared for project: {project_id}[/bold green]")
+        else:
+            # Just clear the base ontology
+            manager = OntologyManager(state_dir=base_ontology_path)
+            manager.clear()
+            manager.save_state()
+            console.print("[bold green]Base ontology cleared successfully[/bold green]")
     except Exception as e:
         console.print(f"[bold red]Error clearing ontology: {e}[/bold red]")
         sys.exit(1)
@@ -154,7 +230,8 @@ def ontology_init():
 @click.option('--limit', '-l', type=int, default=50, help='Maximum number of nodes to display')
 @click.option('--entity-type', '-t', multiple=True, help='Filter by entity type')
 @click.option('--relation-type', '-r', multiple=True, help='Filter by relationship type')
-def ontology_visualize(output, limit, entity_type, relation_type):
+@click.option('--project-id', '-p', help='Visualize ontology for a specific project')
+def ontology_visualize(output, limit, entity_type, relation_type, project_id):
     """Generate a visualization of the ontology graph."""
     try:
         # Check if required packages are installed
@@ -167,10 +244,12 @@ def ontology_visualize(output, limit, entity_type, relation_type):
             console.print("Please install required packages with: pip3 install networkx matplotlib")
             sys.exit(1)
         
-        console.print(f"Generating ontology visualization, saving to {output}...")
+        # Determine which project to visualize
+        project_label = f" (project: {project_id})" if project_id else ""
+        console.print(f"Generating ontology visualization{project_label}, saving to {output}...")
         
-        # Initialize ontology manager
-        ontology_manager = initialize_ontology_manager()
+        # Initialize ontology manager with the specified project
+        ontology_manager = initialize_ontology_manager(project_id)
         
         # Create a NetworkX graph directly from entities and relationships
         G = nx.DiGraph()
@@ -305,10 +384,12 @@ def ontology_visualize(output, limit, entity_type, relation_type):
 @ontology.command('list-entities')
 @click.option('--type', '-t', help='Filter by entity type')
 @click.option('--limit', '-l', type=int, default=20, help='Maximum number of entities to display')
-def ontology_list_entities(type, limit):
+@click.option('--project-id', '-p', help='List entities from a specific project')
+def ontology_list_entities(type, limit, project_id):
     """List entities in the ontology with optional filtering."""
     try:
-        ontology_manager = initialize_ontology_manager()
+        # Initialize ontology manager with the specified project
+        ontology_manager = initialize_ontology_manager(project_id)
         
         # Filter entities by type if specified
         entities = []
@@ -326,8 +407,13 @@ def ontology_list_entities(type, limit):
             console.print("[yellow]No entities found matching the criteria[/yellow]")
             return
         
+        # Prepare title with project information
+        project_info = f" (project: {project_id})" if project_id else ""
+        type_info = f" of type {type}" if type else ""
+        title = f"Ontology Entities{project_info}{type_info}"
+        
         # Display entities
-        table = Table(title=f"Ontology Entities {f'of type {type}' if type else ''}")
+        table = Table(title=title)
         table.add_column("ID", style="cyan")
         table.add_column("Name", style="green")
         table.add_column("Type", style="magenta")
@@ -472,10 +558,12 @@ def ontology_show_relationships(entity_id, depth):
 @click.option('--root-type', '-r', type=str, default='project', help='Type of entities to use as roots')
 @click.option('--max-depth', '-d', type=int, default=3, help='Maximum depth to display')
 @click.option('--compact/--no-compact', default=True, help='Show compact view')
-def ontology_map(root_type, max_depth, compact):
+@click.option('--project-id', '-p', help='Map ontology for a specific project')
+def ontology_map(root_type, max_depth, compact, project_id):
     """Show a hierarchical map of the ontology relationships."""
     try:
-        ontology_manager = initialize_ontology_manager()
+        # Initialize ontology manager with the specified project
+        ontology_manager = initialize_ontology_manager(project_id)
         
         # Find root entities of the specified type
         roots = []
@@ -490,7 +578,9 @@ def ontology_map(root_type, max_depth, compact):
         # Sort roots by name
         roots.sort(key=lambda e: e.name)
         
-        console.print(f"[bold]Ontology Map (starting from {root_type} entities)[/bold]")
+        # Prepare title with project information
+        project_info = f" (project: {project_id})" if project_id else ""
+        console.print(f"[bold]Ontology Map{project_info} (starting from {root_type} entities)[/bold]")
         
         # Process each root entity
         for root in roots:
@@ -637,15 +727,26 @@ def extract():
 
 
 @extract.command('keboola')
-@click.option('--token', '-t', help='Keboola Storage API token', envvar='KEBOOLA_API_TOKEN')
+@click.option('--token', '-t', help='Keboola Storage API token (project ID is auto-detected from this token)', envvar='KEBOOLA_API_TOKEN')
 @click.option('--url', '-u', help='Keboola Storage API URL', envvar='KEBOOLA_API_URL')
+@click.option('--project-id', '-p', help='Override project ID (optional, auto-detected from token by default)', envvar='KEBOOLA_PROJECT_ID')
 @click.option('--incremental/--full', default=True, help='Use incremental extraction')
 @click.option('--batch-size', default=10, help='Batch size for processing')
 @click.option('--vectorize/--no-vectorize', default=True, help='Vectorize metadata after extraction')
 @click.option('--ontology/--no-ontology', default=True, help='Create ontology from metadata relationships')
 @click.option('--index/--no-index', default=True, help='Index vectors after vectorization')
-def extract_keboola(token, url, incremental, batch_size, vectorize, ontology, index):
-    """Extract metadata from Keboola Storage API."""
+@click.option('--clear-collection/--no-clear-collection', default=False, help='Clear the collection before indexing (only for full extraction)')
+def extract_keboola(token, url, project_id, incremental, batch_size, vectorize, ontology, index, clear_collection):
+    """
+    Extract metadata from Keboola Storage API.
+    
+    The project ID is automatically detected from the provided API token, allowing
+    tracking of multiple projects without manual configuration. Each project gets 
+    its own state file, vector collection, and ontology storage.
+    
+    If you need to override the auto-detected project ID, you can provide it
+    explicitly with the --project-id option.
+    """
     try:
         # Import here to not require keboola deps unless needed
         import os
@@ -662,10 +763,14 @@ def extract_keboola(token, url, incremental, batch_size, vectorize, ontology, in
             url = "https://connection.keboola.com"
             console.print(f"[yellow]No API URL provided, using default: {url}[/yellow]")
         
-        # Create extractor
+        # Create extractor - project_id will be auto-detected if not provided
         console.print("[bold]Initializing Keboola extractor...[/bold]")
-        extractor = KeboolaExtractor(token=token, url=url)
+        extractor = KeboolaExtractor(token=token, url=url, project_id=project_id)
         
+        # Show project information
+        detected_project_id = extractor.project_id
+        console.print(f"[bold green]Auto-detected Keboola project ID: {detected_project_id}[/bold green]")
+
         # Extract metadata
         console.print(f"[bold]Extracting metadata ({'incremental' if incremental else 'full'})...[/bold]")
         metadata = extractor.extract(incremental=incremental)
@@ -682,8 +787,14 @@ def extract_keboola(token, url, incremental, batch_size, vectorize, ontology, in
                 try:
                     console.print("[bold]Initializing ontology manager...[/bold]")
                     
+                    # Ensure we have a valid project ID for the ontology directory
+                    ontology_project_id = detected_project_id
+                    if ontology_project_id == "unknown" and project_id:
+                        # If project_id was provided manually, use that instead of "unknown"
+                        ontology_project_id = project_id
+                    
                     # Ensure ontology directory exists
-                    ontology_path = Path("state/ontology")
+                    ontology_path = Path(f"state/ontology/{ontology_project_id}")
                     os.makedirs(ontology_path, exist_ok=True)
                     
                     # Explicitly provide the storage_path
@@ -710,281 +821,253 @@ def extract_keboola(token, url, incremental, batch_size, vectorize, ontology, in
                 
                 # Initialize components
                 vectorizer = Vectorizer(embedding_provider=get_embedding_provider())
-                indexer = QdrantIndexer()
+                
+                # Create collection name including project ID for separate indices
+                collection_name = f"omen_{detected_project_id}"
+                console.print(f"[bold]Using collection: {collection_name}[/bold]")
+                indexer = QdrantIndexer(collection_name=collection_name)
+                
+                # Clear collection if requested (only for full extraction)
+                if clear_collection and not incremental:
+                    console.print(f"[bold yellow]Clearing collection {collection_name} before indexing...[/bold yellow]")
+                    try:
+                        indexer.client.delete_collection(collection_name=collection_name)
+                        console.print("[green]Collection cleared successfully[/green]")
+                        # Recreate the collection
+                        indexer.ensure_collection()
+                    except Exception as e:
+                        console.print(f"[bold red]Error clearing collection: {e}[/bold red]")
+                
                 processor = MetadataProcessor(vectorizer=vectorizer, indexer=indexer, batch_size=batch_size)
                 components_initialized = True
                 
                 # Process and vectorize
                 processor.process_batch(metadata, batch_size=batch_size)
                 console.print(f"[green]Processed and indexed {len(metadata)} documents[/green]")
-            
-            # Create ontology from metadata if enabled
-            if ontology and ontology_manager:
-                console.print("[bold]Creating ontology from metadata relationships...[/bold]")
-                
-                # Track ontology creation metrics
-                created_entities = 0
-                created_relationships = 0
-                
-                # Process each metadata item to create ontology entries
-                for meta_item in metadata:
-                    try:
-                        # Create entity for the item itself
-                        entity_id = f"{meta_item.source.type.value}-{meta_item.source.id}"
-                        entity_name = getattr(meta_item, 'name', meta_item.source.id)
-                        entity_type = meta_item.source.type.value
-                        
-                        # Skip if entity already exists (for incremental updates)
-                        if not ontology_manager.entity_exists(entity_id):
-                            # Create Entity object
-                            entity = Entity(
-                                id=entity_id,
-                                name=entity_name,
-                                type=EntityType(entity_type),
-                                properties={
-                                    "source": "keboola",
-                                    "extraction_time": str(meta_item.source.updated_at or datetime.now(timezone.utc))
-                                }
-                            )
-                            ontology_manager.add_entity(entity)
-                            created_entities += 1
-                        
-                        # Create relationships based on metadata type
-                        
-                        # Parent relationship - check multiple possible parent fields
-                        parent_id = None
-                        parent_type = None
-                        
-                        # Check different possible parent fields
-                        if hasattr(meta_item, 'parent_id') and meta_item.parent_id:
-                            parent_id = meta_item.parent_id
-                            parent_type = getattr(meta_item, 'parent_type', 'unknown')
-                        elif hasattr(meta_item.source, 'parent_id') and meta_item.source.parent_id:
-                            parent_id = meta_item.source.parent_id
-                            parent_type = getattr(meta_item.source, 'parent_type', 'unknown')
-                        elif hasattr(meta_item, 'metadata') and meta_item.metadata:
-                            # Try to find parent information in metadata
-                            if 'parent_id' in meta_item.metadata:
-                                parent_id = meta_item.metadata.get('parent_id')
-                                parent_type = meta_item.metadata.get('parent_type', 'unknown')
-                            elif 'bucket_id' in meta_item.metadata and meta_item.source.type == MetadataType.TABLE:
-                                # For tables, use bucket as parent
-                                parent_id = meta_item.metadata.get('bucket_id')
-                                parent_type = 'bucket'
-                        
-                        # Create parent relationship if found
-                        if parent_id:
-                            full_parent_id = f"{parent_type}-{parent_id}"
-                            
-                            # Create parent entity if needed
-                            if not ontology_manager.entity_exists(full_parent_id):
-                                parent_name = None
-                                # Try to get parent name from metadata
-                                if hasattr(meta_item, 'metadata') and meta_item.metadata:
-                                    if 'parent_name' in meta_item.metadata:
-                                        parent_name = meta_item.metadata.get('parent_name')
-                                    elif 'bucket_name' in meta_item.metadata:
-                                        parent_name = meta_item.metadata.get('bucket_name')
-                                
-                                if not parent_name:
-                                    parent_name = f"{parent_type.title()} {parent_id}"
-                                
-                                parent_entity = Entity(
-                                    id=full_parent_id,
-                                    name=parent_name,
-                                    type=EntityType(parent_type)
-                                )
-                                ontology_manager.add_entity(parent_entity)
-                                created_entities += 1
-                            
-                            # Check if relationship already exists to avoid duplicates
-                            rel_exists = False
-                            for existing_rel in ontology_manager.get_relationships_for_entity(entity_id):
-                                if existing_rel.source_id == entity_id and existing_rel.target_id == full_parent_id:
-                                    rel_exists = True
-                                    break
-                            
-                            # Add relationship if it doesn't exist yet
-                            if not rel_exists:
-                                rel = Relationship(
-                                    source_id=entity_id,
-                                    target_id=full_parent_id,
-                                    type=RelationshipType.BELONGS_TO
-                                )
-                                ontology_manager.add_relationship(rel)
-                                created_relationships += 1
-                                logger.info(f"Created relationship: {entity_id} BELONGS_TO {full_parent_id}")
-                        
-                        # Add project relationships
-                        project_id = None
-                        if hasattr(meta_item, 'project_id') and meta_item.project_id:
-                            project_id = meta_item.project_id
-                        elif hasattr(meta_item.source, 'project_id') and meta_item.source.project_id:
-                            project_id = meta_item.source.project_id
-                        elif hasattr(meta_item, 'metadata') and meta_item.metadata and 'project_id' in meta_item.metadata:
-                            project_id = meta_item.metadata.get('project_id')
-                        
-                        if project_id:
-                            full_project_id = f"project-{project_id}"
-                            
-                            # Create project entity if needed
-                            if not ontology_manager.entity_exists(full_project_id):
-                                project_name = None
-                                # Try to get project name from metadata
-                                if hasattr(meta_item, 'metadata') and meta_item.metadata and 'project_name' in meta_item.metadata:
-                                    project_name = meta_item.metadata.get('project_name')
-                                
-                                if not project_name:
-                                    project_name = f"Project {project_id}"
-                                
-                                project_entity = Entity(
-                                    id=full_project_id,
-                                    name=project_name,
-                                    type=EntityType.PROJECT
-                                )
-                                ontology_manager.add_entity(project_entity)
-                                created_entities += 1
-                            
-                            # Check if relationship already exists
-                            rel_exists = False
-                            for existing_rel in ontology_manager.get_relationships_for_entity(entity_id):
-                                if existing_rel.source_id == entity_id and existing_rel.target_id == full_project_id:
-                                    rel_exists = True
-                                    break
-                            
-                            # Add relationship if it doesn't exist yet
-                            if not rel_exists:
-                                rel = Relationship(
-                                    source_id=entity_id,
-                                    target_id=full_project_id,
-                                    type=RelationshipType.BELONGS_TO
-                                )
-                                ontology_manager.add_relationship(rel)
-                                created_relationships += 1
-                                logger.info(f"Created relationship: {entity_id} BELONGS_TO {full_project_id}")
-                        
-                        # Add related entity relationships based on metadata
-                        if hasattr(meta_item, 'metadata') and meta_item.metadata:
-                            # Special handling for Keboola-specific relationships
-                            
-                            # For tables, create relationships with columns
-                            if meta_item.source.type == MetadataType.TABLE and 'columns' in meta_item.metadata:
-                                columns = meta_item.metadata.get('columns', [])
-                                if isinstance(columns, list):
-                                    for col_data in columns:
-                                        if isinstance(col_data, dict) and 'name' in col_data:
-                                            col_id = f"{meta_item.source.id}.{col_data.get('name')}"
-                                            col_entity_id = f"column-{col_id}"
-                                            
-                                            # Create column entity
-                                            if not ontology_manager.entity_exists(col_entity_id):
-                                                col_entity = Entity(
-                                                    id=col_entity_id,
-                                                    name=col_data.get('name'),
-                                                    type=EntityType.COLUMN,
-                                                    properties={
-                                                        "datatype": col_data.get('type', 'unknown'),
-                                                        "table_id": meta_item.source.id,
-                                                        "source": "keboola"
-                                                    }
-                                                )
-                                                ontology_manager.add_entity(col_entity)
-                                                created_entities += 1
-                                            
-                                            # Create has_column relationship
-                                            rel_exists = False
-                                            for existing_rel in ontology_manager.get_relationships_for_entity(entity_id):
-                                                if existing_rel.source_id == entity_id and existing_rel.target_id == col_entity_id:
-                                                    rel_exists = True
-                                                    break
-                                            
-                                            if not rel_exists:
-                                                rel = Relationship(
-                                                    source_id=entity_id,
-                                                    target_id=col_entity_id,
-                                                    type=RelationshipType.HAS_COLUMN
-                                                )
-                                                ontology_manager.add_relationship(rel)
-                                                created_relationships += 1
-                            
-                            # Look for fields like related_entity_id, input_table_id, output_table_id, etc.
-                            for key, value in meta_item.metadata.items():
-                                if not value:  # Skip empty values
-                                    continue
-                                    
-                                rel_type = None
-                                rel_entity_id = None
-                                rel_entity_type = None
-                                
-                                if key == 'related_entity_id':
-                                    rel_entity_id = value
-                                    rel_entity_type = meta_item.metadata.get('related_entity_type', 'unknown')
-                                    rel_type = RelationshipType.RELATED_TO
-                                elif key == 'input_table_id':
-                                    rel_entity_id = value
-                                    rel_entity_type = 'table'
-                                    rel_type = RelationshipType.INPUTS_FROM
-                                elif key == 'output_table_id':
-                                    rel_entity_id = value
-                                    rel_entity_type = 'table'
-                                    rel_type = RelationshipType.OUTPUTS_TO
-                                elif key.endswith('_id') and not key in ['parent_id', 'project_id', 'id', 'bucket_id']:
-                                    # Try to infer relationship from field name
-                                    rel_entity_id = value
-                                    rel_entity_type = key.replace('_id', '')
-                                    rel_type = RelationshipType.RELATED_TO
-                                
-                                if rel_entity_id and rel_entity_type and rel_type:
-                                    # Handle possible list values
-                                    if isinstance(rel_entity_id, list):
-                                        rel_ids = rel_entity_id
-                                    else:
-                                        rel_ids = [rel_entity_id]
-                                    
-                                    for single_rel_id in rel_ids:
-                                        if not single_rel_id:  # Skip empty values
-                                            continue
-                                            
-                                        full_rel_entity_id = f"{rel_entity_type}-{single_rel_id}"
-                                        
-                                        # Check if related entity exists, create if not
-                                        if not ontology_manager.entity_exists(full_rel_entity_id):
-                                            rel_entity_name = meta_item.metadata.get(key.replace('_id', '_name'), f"{rel_entity_type.title()} {single_rel_id}")
-                                            
-                                            rel_entity = Entity(
-                                                id=full_rel_entity_id,
-                                                name=rel_entity_name,
-                                                type=EntityType(rel_entity_type)
-                                            )
-                                            ontology_manager.add_entity(rel_entity)
-                                            created_entities += 1
-                                        
-                                        # Check if relationship already exists
-                                        rel_exists = False
-                                        for existing_rel in ontology_manager.get_relationships_for_entity(entity_id):
-                                            if existing_rel.source_id == entity_id and existing_rel.target_id == full_rel_entity_id and existing_rel.type == rel_type:
-                                                rel_exists = True
-                                                break
-                                        
-                                        # Add relationship if it doesn't exist yet
-                                        if not rel_exists:
-                                            rel = Relationship(
-                                                source_id=entity_id,
-                                                target_id=full_rel_entity_id,
-                                                type=rel_type
-                                            )
-                                            ontology_manager.add_relationship(rel)
-                                            created_relationships += 1
-                                            logger.info(f"Created relationship: {entity_id} {rel_type.value} {full_rel_entity_id}")
-                    
-                    except Exception as e:
-                        logger.error(f"Error creating ontology for item {meta_item.source.id}: {e}")
-                
-                # Save ontology state
-                ontology_manager.save_state()
-                console.print(f"[green]Created {created_entities} entities and {created_relationships} relationships in the ontology[/green]")
         
         console.print("[bold green]Extraction completed successfully![/bold green]")
+
+        if ontology and ontology_manager:
+            console.print("[bold]Creating ontology from metadata relationships...[/bold]")
+            
+            # Track ontology creation metrics
+            created_entities = 0
+            created_relationships = 0
+            
+            # Create a mapping of metadata items by ID for relationship creation
+            metadata_by_id = {
+                f"{item.source.type.value}-{item.source.id}": item 
+                for item in metadata
+            }
+            
+            # First pass: create all entities
+            entity_map = {}  # Track created entities
+            
+            for meta_item in metadata:
+                try:
+                    # Create entity for the item itself
+                    entity_id = f"{meta_item.source.type.value}-{meta_item.source.id}"
+                    
+                    # Skip if entity already exists
+                    if ontology_manager.entity_exists(entity_id):
+                        continue
+                        
+                    # Determine entity name based on type - ensure it's never None
+                    entity_name = meta_item.source.id  # Default fallback name is the ID
+                    
+                    # Try to get a more user-friendly name based on type
+                    if meta_item.source.type == MetadataType.BUCKET and "bucket_name" in meta_item.metadata:
+                        entity_name = meta_item.metadata["bucket_name"] or entity_name
+                    elif meta_item.source.type == MetadataType.TABLE and "table_name" in meta_item.metadata:
+                        entity_name = meta_item.metadata["table_name"] or entity_name
+                    elif meta_item.source.type == MetadataType.CONFIGURATION and "name" in meta_item.metadata:
+                        entity_name = meta_item.metadata["name"] or entity_name
+                    elif meta_item.source.type == MetadataType.COLUMN:
+                        # For columns, properly extract name from content
+                        content_data = json.loads(meta_item.content)
+                        if "name" in content_data and content_data["name"]:
+                            entity_name = content_data["name"]
+                        # Also try metadata as backup
+                        elif "table_name" in meta_item.metadata:
+                            # Extract column name from column_id (table_id.column_name)
+                            parts = meta_item.source.id.split(".")
+                            if len(parts) > 1:
+                                entity_name = parts[-1]  # Last part should be column name
+                    
+                    # Final check to ensure name is never None
+                    if entity_name is None or entity_name == "":
+                        entity_name = f"{meta_item.source.type.value}_{meta_item.source.id}"
+                    
+                    # Create the entity
+                    entity = Entity(
+                        id=entity_id,
+                        name=entity_name,
+                        type=meta_item.source.type,
+                        properties={
+                            "source": "keboola",
+                            "project_id": detected_project_id,
+                            "extraction_time": str(meta_item.source.updated_at or datetime.now(timezone.utc))
+                        }
+                    )
+                    
+                    # Add type-specific properties
+                    if meta_item.source.type == MetadataType.COLUMN:
+                        try:
+                            content = json.loads(meta_item.content)
+                            if "definition" in content and isinstance(content["definition"], dict):
+                                if "type" in content["definition"]:
+                                    entity.properties["dataType"] = content["definition"]["type"]
+                                # Add table reference for clarity
+                                if "table" in content:
+                                    entity.properties["table_id"] = content["table"]
+                                elif "table_id" in meta_item.metadata:
+                                    entity.properties["table_id"] = meta_item.metadata["table_id"]
+                        except (json.JSONDecodeError, AttributeError) as e:
+                            logger.warning(f"Failed to extract column properties for {entity_id}: {e}")
+                    elif meta_item.source.type == MetadataType.CONFIGURATION:
+                        if "component_id" in meta_item.metadata:
+                            entity.properties["component_id"] = meta_item.metadata.get("component_id", "")
+                        if "component_name" in meta_item.metadata:
+                            entity.properties["component_name"] = meta_item.metadata.get("component_name", "")
+                    
+                    # Add the entity
+                    ontology_manager.add_entity(entity)
+                    entity_map[entity_id] = entity
+                    created_entities += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error creating entity for {meta_item.source.id}: {e}")
+            
+            # Second pass: create all relationships from metadata
+            for meta_item in metadata:
+                try:
+                    source_id = f"{meta_item.source.type.value}-{meta_item.source.id}"
+                    
+                    # Skip if source entity doesn't exist
+                    if not ontology_manager.entity_exists(source_id):
+                        continue
+                    
+                    # Create relationships from the relationships metadata
+                    if "relationships" in meta_item.metadata:
+                        for rel in meta_item.metadata["relationships"]:
+                            rel_type = rel.get("type")
+                            target_type = rel.get("target_type")
+                            target_id = rel.get("target_id")
+                            
+                            if not rel_type or not target_type or not target_id:
+                                continue
+                                
+                            # Construct full target ID
+                            full_target_id = f"{target_type}-{target_id}"
+                            
+                            # Create target entity if it doesn't exist
+                            if not ontology_manager.entity_exists(full_target_id):
+                                # Try to find target in our metadata
+                                target_entity_name = target_id  # Default fallback is the ID
+                                if full_target_id in metadata_by_id:
+                                    target_meta = metadata_by_id[full_target_id]
+                                    if target_type == "bucket" and "bucket_name" in target_meta.metadata:
+                                        target_entity_name = target_meta.metadata["bucket_name"] or target_entity_name
+                                    elif target_type == "table" and "table_name" in target_meta.metadata:
+                                        target_entity_name = target_meta.metadata["table_name"] or target_entity_name
+                                
+                                # Ensure name is valid
+                                if target_entity_name is None or target_entity_name == "":
+                                    target_entity_name = f"{target_type}_{target_id}"
+                                
+                                # Create the entity
+                                target_entity = Entity(
+                                    id=full_target_id,
+                                    name=target_entity_name,
+                                    type=EntityType(target_type),
+                                    properties={
+                                        "source": "keboola",
+                                        "project_id": detected_project_id
+                                    }
+                                )
+                                ontology_manager.add_entity(target_entity)
+                                entity_map[full_target_id] = target_entity
+                                created_entities += 1
+                            
+                            # Determine relationship type
+                            relationship_type = None
+                            if rel_type == "belongs_to":
+                                relationship_type = RelationshipType.BELONGS_TO
+                            elif rel_type == "uses":
+                                relationship_type = RelationshipType.INPUTS_FROM
+                            elif rel_type == "produces":
+                                relationship_type = RelationshipType.OUTPUTS_TO
+                            elif rel_type == "related_to":
+                                relationship_type = RelationshipType.RELATED_TO
+                            else:
+                                # Default fallback
+                                relationship_type = RelationshipType.RELATED_TO
+                            
+                            # Check if relationship already exists to avoid duplicates
+                            if not ontology_manager.relationship_exists(source_id, full_target_id, relationship_type.value):
+                                # Create relationship ID
+                                rel_id = f"{source_id}_{relationship_type.value}_{full_target_id}"
+                                
+                                # Create relationship
+                                relationship = Relationship(
+                                    id=rel_id,
+                                    source_id=source_id,
+                                    target_id=full_target_id,
+                                    type=relationship_type,
+                                    properties={
+                                        "created_at": datetime.now(timezone.utc).isoformat()
+                                    }
+                                )
+                                ontology_manager.add_relationship(relationship)
+                                created_relationships += 1
+                                logger.debug(f"Created relationship: {source_id} {relationship_type.value} {full_target_id}")
+                    
+                    # Create project relationships for all entities
+                    project_id = meta_item.source.project_id
+                    if project_id:
+                        full_project_id = f"project-{project_id}"
+                        
+                        # Create project entity if it doesn't exist
+                        if not ontology_manager.entity_exists(full_project_id):
+                            project_name = meta_item.metadata.get("project_name") or f"Project {project_id}"
+                            
+                            project_entity = Entity(
+                                id=full_project_id,
+                                name=project_name,
+                                type=EntityType.PROJECT
+                            )
+                            ontology_manager.add_entity(project_entity)
+                            entity_map[full_project_id] = project_entity
+                            created_entities += 1
+                        
+                        # Skip bucket and configuration entities as they already have direct project relationships
+                        if meta_item.source.type not in [MetadataType.BUCKET, MetadataType.CONFIGURATION]:
+                            # Check if relationship already exists
+                            if not ontology_manager.relationship_exists(source_id, full_project_id, RelationshipType.BELONGS_TO.value):
+                                # Create relationship ID
+                                rel_id = f"{source_id}_belongs_to_{full_project_id}"
+                                
+                                # Create relationship
+                                relationship = Relationship(
+                                    id=rel_id,
+                                    source_id=source_id,
+                                    target_id=full_project_id,
+                                    type=RelationshipType.BELONGS_TO,
+                                    properties={
+                                        "created_at": datetime.now(timezone.utc).isoformat()
+                                    }
+                                )
+                                ontology_manager.add_relationship(relationship)
+                                created_relationships += 1
+                                logger.debug(f"Created relationship: {source_id} belongs_to {full_project_id}")
+                        
+                except Exception as e:
+                    logger.error(f"Error creating relationships for {meta_item.source.id}: {e}")
+            
+            # Save the ontology
+            ontology_manager.save_state()
+            console.print(f"[green]Created {created_entities} entities and {created_relationships} relationships in the ontology[/green]")
+
     except ImportError as e:
         console.print(f"[bold red]Error: Keboola extractor dependencies not installed[/bold red]")
         console.print(f"[bold red]Exception details: {e}[/bold red]")
@@ -1325,19 +1408,72 @@ def search_query(query, limit, type):
         sys.exit(1)
 
 
-def initialize_ontology_manager():
-    """Initialize the ontology manager for semantic search."""
+def initialize_ontology_manager(project_id: Optional[str] = None):
+    """Initialize the ontology manager for semantic search.
+    
+    Args:
+        project_id: If provided, load ontology data for the specific project.
+                   If None, loads from the main ontology directory and/or 
+                   combines data from all project subdirectories.
+    """
     from omen.ontology.manager import OntologyManager
+    import glob
     
-    # Ensure ontology directory exists
-    ontology_path = Path("state/ontology")
-    os.makedirs(ontology_path, exist_ok=True)
+    # Base ontology path
+    base_ontology_path = Path("state/ontology")
+    os.makedirs(base_ontology_path, exist_ok=True)
     
-    # Create and load ontology manager
-    ontology_manager = OntologyManager(state_dir=ontology_path)
-    ontology_manager.load_state()
+    # If a specific project ID is provided, use that project's ontology
+    if project_id:
+        project_path = base_ontology_path / project_id
+        os.makedirs(project_path, exist_ok=True)
+        ontology_manager = OntologyManager(state_dir=project_path)
+        ontology_manager.load_state()
+        return ontology_manager
     
-    return ontology_manager
+    # For ontology stats and other general commands, we want to check
+    # both the base directory and all project directories
+    
+    # Check if there are project subdirectories and if they contain more data
+    project_dirs = [d for d in os.listdir(base_ontology_path) 
+                   if os.path.isdir(os.path.join(base_ontology_path, d))]
+    
+    # If no project subdirectories, just use the base ontology
+    if not project_dirs:
+        ontology_manager = OntologyManager(state_dir=base_ontology_path)
+        ontology_manager.load_state()
+        return ontology_manager
+    
+    # Check if project dirs contain more entities than the base dir
+    base_manager = OntologyManager(state_dir=base_ontology_path)
+    base_manager.load_state()
+    
+    # Find the project with the most entities
+    max_entities = len(base_manager.entities)
+    max_entity_project = None
+    
+    for project_dir in project_dirs:
+        project_path = base_ontology_path / project_dir
+        if os.path.exists(project_path / "entities.json"):
+            try:
+                temp_manager = OntologyManager(state_dir=project_path)
+                temp_manager.load_state()
+                entity_count = len(temp_manager.entities)
+                if entity_count > max_entities:
+                    max_entities = entity_count
+                    max_entity_project = project_dir
+            except Exception as e:
+                logger.warning(f"Couldn't load ontology from {project_dir}: {e}")
+    
+    # Use the project directory with the most entities
+    if max_entity_project:
+        logger.info(f"Using ontology from project directory '{max_entity_project}' with {max_entities} entities")
+        ontology_manager = OntologyManager(state_dir=base_ontology_path / max_entity_project)
+        ontology_manager.load_state()
+        return ontology_manager
+    
+    # Fallback to base ontology
+    return base_manager
 
 
 def initialize_hybrid_search():
@@ -1645,6 +1781,178 @@ def initialize_vectorstore():
         indexer=indexer,
         embedding_provider=embedding_provider
     )
+
+
+@cli.group()
+def projects():
+    """Manage multiple Keboola projects."""
+    pass
+
+
+@projects.command('list')
+def projects_list():
+    """List all indexed projects."""
+    try:
+        from pathlib import Path
+        import json
+        import os
+        
+        state_dir = os.getenv("OMEN_STATE_DIR", os.path.expanduser("~/.omen"))
+        projects_found = {}
+        
+        # Look for project state files
+        for file in Path(state_dir).glob("keboola_state_*.json"):
+            try:
+                # Extract project ID from filename
+                filename = file.name
+                project_id = filename.replace("keboola_state_", "").replace(".json", "")
+                
+                # Load state file to get metadata
+                with open(file) as f:
+                    state = json.load(f)
+                    
+                last_run = state.get("last_run", "Never")
+                num_tables = len(state.get("processed_tables", []))
+                num_buckets = len(state.get("processed_buckets", []))
+                
+                projects_found[project_id] = {
+                    "last_run": last_run,
+                    "tables": num_tables,
+                    "buckets": num_buckets,
+                    "state_file": str(file)
+                }
+            except Exception as e:
+                console.print(f"[yellow]Warning: Error processing {file}: {e}[/yellow]")
+        
+        # Check vector collections for each project
+        try:
+            from omen.vectorstore import QdrantIndexer
+            
+            # Create temporary client to list collections
+            indexer = QdrantIndexer()
+            collections = indexer.client.get_collections().collections
+            
+            # Find project collections
+            for collection in collections:
+                if collection.name.startswith("omen_"):
+                    try:
+                        project_id = collection.name.replace("omen_", "")
+                        
+                        # Count documents
+                        count_result = indexer.client.count(collection_name=collection.name)
+                        doc_count = count_result.count
+                        
+                        # Add or update project info
+                        if project_id in projects_found:
+                            projects_found[project_id]["collection"] = collection.name
+                            projects_found[project_id]["document_count"] = doc_count
+                        else:
+                            projects_found[project_id] = {
+                                "last_run": "Unknown",
+                                "tables": "Unknown",
+                                "buckets": "Unknown",
+                                "collection": collection.name,
+                                "document_count": doc_count
+                            }
+                    except Exception as e:
+                        console.print(f"[yellow]Warning: Error processing collection {collection.name}: {e}[/yellow]")
+        except Exception as e:
+            console.print(f"[yellow]Warning: Error checking vector collections: {e}[/yellow]")
+        
+        # Display results
+        if not projects_found:
+            console.print("[yellow]No projects found[/yellow]")
+            return
+            
+        console.print("[bold]Indexed projects:[/bold]")
+        
+        # Create table
+        from rich.table import Table
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Project ID")
+        table.add_column("Last Run")
+        table.add_column("Tables")
+        table.add_column("Buckets")
+        table.add_column("Documents")
+        table.add_column("Collection")
+        
+        for project_id, info in sorted(projects_found.items()):
+            table.add_row(
+                project_id,
+                info.get("last_run", "Never"),
+                str(info.get("tables", "Unknown")),
+                str(info.get("buckets", "Unknown")),
+                str(info.get("document_count", "Unknown")),
+                info.get("collection", "None")
+            )
+            
+        console.print(table)
+        
+    except Exception as e:
+        console.print(f"[bold red]Error listing projects: {e}[/bold red]")
+
+
+@projects.command('delete')
+@click.argument('project_id', type=str)
+@click.option('--state/--no-state', default=True, help='Delete project state file')
+@click.option('--documents/--no-documents', default=True, help='Delete project documents from vector store')
+@click.option('--ontology/--no-ontology', default=True, help='Delete project ontology')
+@click.confirmation_option(prompt='Are you sure you want to delete this project?')
+def projects_delete(project_id, state, documents, ontology):
+    """Delete a project's data (state, documents, and/or ontology)."""
+    try:
+        from pathlib import Path
+        import os
+        import shutil
+        
+        state_dir = os.getenv("OMEN_STATE_DIR", os.path.expanduser("~/.omen"))
+        state_file = Path(state_dir) / f"keboola_state_{project_id}.json"
+        
+        # Delete state file if requested
+        if state and state_file.exists():
+            try:
+                state_file.unlink()
+                console.print(f"[green]Deleted state file for project {project_id}[/green]")
+            except Exception as e:
+                console.print(f"[bold red]Error deleting state file: {e}[/bold red]")
+        elif state:
+            console.print(f"[yellow]No state file found for project {project_id}[/yellow]")
+        
+        # Delete ontology if requested
+        if ontology:
+            try:
+                ontology_dir = Path(f"state/ontology/{project_id}")
+                if ontology_dir.exists():
+                    shutil.rmtree(ontology_dir)
+                    console.print(f"[green]Deleted ontology for project {project_id}[/green]")
+                else:
+                    console.print(f"[yellow]No ontology found for project {project_id}[/yellow]")
+            except Exception as e:
+                console.print(f"[bold red]Error deleting ontology: {e}[/bold red]")
+        
+        # Delete documents if requested
+        if documents:
+            try:
+                from omen.vectorstore import QdrantIndexer
+                
+                # Create indexer with project-specific collection
+                collection_name = f"omen_{project_id}"
+                indexer = QdrantIndexer(collection_name=collection_name)
+                
+                # Delete project documents
+                deleted_count = indexer.delete_project_documents(project_id)
+                
+                if deleted_count > 0:
+                    console.print(f"[green]Deleted {deleted_count} documents for project {project_id}[/green]")
+                else:
+                    console.print(f"[yellow]No documents found for project {project_id}[/yellow]")
+            except Exception as e:
+                console.print(f"[bold red]Error deleting documents: {e}[/bold red]")
+        
+        console.print(f"[bold green]Successfully cleaned up project {project_id}[/bold green]")
+        
+    except Exception as e:
+        console.print(f"[bold red]Error deleting project: {e}[/bold red]")
 
 
 if __name__ == '__main__':

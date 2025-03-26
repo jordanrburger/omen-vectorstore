@@ -11,6 +11,45 @@ The `omen-ontology` package manages the knowledge graph aspects of the OMEN plat
 3. **Knowledge Graph Storage**: Persistent storage of the ontology using RDF
 4. **Graph Queries**: Query the knowledge graph for entities and relationships
 5. **Schema Validation**: Ensure data integrity through schema validation
+6. **Multi-Project Support**: Manage separate ontologies for different projects
+
+## Multi-Project Support
+
+The ontology manager supports working with multiple projects simultaneously by organizing ontology data in project-specific directories:
+
+```python
+from omen.ontology import OntologyManager
+from pathlib import Path
+
+# Create ontology managers for different projects
+project1_manager = OntologyManager(state_dir=Path("state/ontology/project1"))
+project2_manager = OntologyManager(state_dir=Path("state/ontology/project2"))
+
+# Each project has its own set of entities and relationships
+project1_manager.load_state()
+project2_manager.load_state()
+
+# Get statistics for each project
+project1_stats = project1_manager.get_stats()
+project2_stats = project2_manager.get_stats()
+
+print(f"Project 1 entities: {project1_stats['total_entities']}")
+print(f"Project 2 entities: {project2_stats['total_entities']}")
+```
+
+The default directory structure for multi-project ontologies is:
+```
+state/ontology/
+├── project1/
+│   ├── entities.json
+│   ├── relationships.json
+│   └── ontology.ttl
+├── project2/
+│   ├── entities.json
+│   ├── relationships.json
+│   └── ontology.ttl
+└── ...
+```
 
 ## Key Components
 
@@ -191,6 +230,27 @@ for entity_type, count in stats["entity_types"].items():
 # Relationship types distribution
 for rel_type, count in stats["relationship_types"].items():
     print(f"{rel_type}: {count} relationships")
+```
+
+## CLI Commands for Multi-Project Ontologies
+
+The OMEN CLI provides several commands for working with multi-project ontologies:
+
+```bash
+# View ontology statistics for a specific project
+omen ontology stats --project-id PROJECT_ID
+
+# List all available project ontologies
+omen ontology stats --list-projects
+
+# Clear ontology data for a specific project
+omen ontology clear --project-id PROJECT_ID
+
+# Visualize ontology graph for a specific project
+omen ontology visualize --project-id PROJECT_ID --output graph.png
+
+# List entities from a specific project's ontology
+omen ontology list-entities --project-id PROJECT_ID --type TABLE
 ```
 
 ## Installation

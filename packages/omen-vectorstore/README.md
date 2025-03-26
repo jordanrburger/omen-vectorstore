@@ -188,3 +188,85 @@ pip install -e "packages/omen-vectorstore"
 ## License
 
 MIT License
+
+## Features
+
+- Vector storage for semantic search using [Qdrant](https://qdrant.tech/)
+- Document indexing with vector embeddings
+- State management for tracking indexed documents
+- Multi-project support with separate vector collections
+- Filter-based search and retrieval
+
+## Usage
+
+### Basic Usage
+
+```python
+from omen.vectorstore import QdrantIndexer
+
+# Create an indexer (defaults to omen collection)
+indexer = QdrantIndexer()
+
+# Or with project-specific collection
+indexer = QdrantIndexer(project_id="my_project_123")
+
+# Index a document
+document = {
+    "id": "unique_id_1",
+    "type": "table",
+    "content": "This is a table containing customer transaction data",
+    "metadata": {
+        "name": "transactions",
+        "project_id": "my_project_123"
+    }
+}
+indexer.index_document(document)
+
+# Search for documents
+results = indexer.search("customer transactions", limit=5)
+```
+
+## Multi-Project Support
+
+The `omen-vectorstore` package supports managing multiple projects by creating separate vector collections for each project:
+
+```python
+# Create indexers for different projects
+project1_indexer = QdrantIndexer(project_id="project_123")
+project2_indexer = QdrantIndexer(project_id="project_456")
+
+# Each project gets its own collection (omen_project_123, omen_project_456)
+# Documents are indexed into their respective project collections
+project1_indexer.index_document(document1)
+project2_indexer.index_document(document2)
+
+# Search within a specific project
+results = project1_indexer.search("customer data")
+
+# List all projects that have collections
+all_projects = QdrantIndexer.list_projects()
+print(all_projects)  # ['project_123', 'project_456']
+
+# Delete a project's collection
+QdrantIndexer.delete_project("project_123")
+```
+
+### Collection Naming
+
+When using project-specific indexers, collections are automatically named using the format `omen_{project_id}`. This ensures:
+
+1. Each project's vectors are stored independently
+2. Search operations are scoped to the relevant project
+3. Projects can be easily managed individually
+
+### State Tracking
+
+State is tracked separately for each project:
+
+```python
+# Get state for a specific project
+state = project1_indexer.get_state()
+
+# Incremental indexing uses project-specific state
+project1_indexer.index_document(document, state=state)
+```
