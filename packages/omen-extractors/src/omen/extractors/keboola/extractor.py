@@ -47,12 +47,16 @@ class KeboolaExtractor:
         # Remove trailing slash from URL
         self.url = url.rstrip("/")
         self.headers = {"X-StorageApi-Token": self.token}
-        self.state_file = os.path.expanduser("~/.omen/keboola_state.json")
+        
+        # Use OMEN_STATE_DIR if available, otherwise use home directory
+        state_dir = os.getenv("OMEN_STATE_DIR", os.path.expanduser("~/.omen"))
+        self.state_file = os.path.join(state_dir, "keboola_state.json")
         
         # Ensure state directory exists
         os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
         
         logger.info(f"Initialized Keboola extractor for {self.url}")
+        logger.info(f"Using state file: {self.state_file}")
 
     def _load_state(self) -> Dict[str, Any]:
         """
@@ -107,29 +111,52 @@ class KeboolaExtractor:
         Returns:
             List of metadata documents.
         """
+        logger.info(f"Starting {'incremental' if incremental else 'full'} extraction")
+        
         state = self._load_state() if incremental else {
             "last_run": None,
             "processed_tables": set(),
             "processed_buckets": set(),
         }
         
+        # Initialize new sets to track items processed in this run
+        newly_processed_buckets = set()
+        newly_processed_tables = set()
+        last_run_timestamp = state.get("last_run")
+        
         documents = []
         
         # Extract bucket metadata
+        logger.info(f"Extracting buckets (last run: {last_run_timestamp})")
         buckets = self.extract_buckets(state["processed_buckets"])
         documents.extend(buckets)
+        logger.info(f"Extracted {len(buckets)} buckets")
         
         # Extract table metadata
+        logger.info(f"Extracting tables (last run: {last_run_timestamp})")
         tables = self.extract_tables(state["processed_tables"])
         documents.extend(tables)
+        logger.info(f"Extracted {len(tables)} tables")
         
-        # Update state
+        # Update state with newly processed items
         if incremental:
-            state["last_run"] = datetime.now(timezone.utc).isoformat()
-            state["processed_buckets"].update(bucket.source.id for bucket in buckets)
-            state["processed_tables"].update(table.source.id for table in tables)
+            logger.info("Updating state for incremental extraction")
+            current_time = datetime.now(timezone.utc).isoformat()
+            
+            # Track all items processed in this run
+            newly_processed_buckets = {bucket.source.id for bucket in buckets}
+            newly_processed_tables = {table.source.id for table in tables}
+            
+            # Update sets in state with newly processed items
+            state["processed_buckets"].update(newly_processed_buckets)
+            state["processed_tables"].update(newly_processed_tables)
+            state["last_run"] = current_time
+            
+            # Save updated state
             self._save_state(state)
+            logger.info(f"Updated state with {len(newly_processed_buckets)} new buckets and {len(newly_processed_tables)} new tables")
         
+        logger.info(f"Extraction complete, {len(documents)} items extracted")
         return documents
 
     def extract_buckets(self, processed_buckets: Set[str]) -> List[MetadataDocument]:
@@ -150,6 +177,7 @@ class KeboolaExtractor:
             for bucket in buckets:
                 bucket_id = bucket["id"]
                 if bucket_id in processed_buckets:
+                    logger.debug(f"Skipping already processed bucket: {bucket_id}")
                     continue
                     
                 try:
@@ -160,19 +188,41 @@ class KeboolaExtractor:
                     detail_response.raise_for_status()
                     detail = detail_response.json()
                     
+                    # Safe date parsing with default values if None
+                    updated_at = None
+                    created_at = None
+                    
+                    if bucket.get("lastChangeDate"):
+                        try:
+                            updated_at = datetime.fromisoformat(bucket["lastChangeDate"].replace("Z", "+00:00"))
+                        except (AttributeError, ValueError) as e:
+                            logger.warning(f"Failed to parse lastChangeDate for bucket {bucket_id}: {e}")
+                            updated_at = datetime.now(timezone.utc)
+                    else:
+                        updated_at = datetime.now(timezone.utc)
+                    
+                    if bucket.get("created"):
+                        try:
+                            created_at = datetime.fromisoformat(bucket["created"].replace("Z", "+00:00"))
+                        except (AttributeError, ValueError) as e:
+                            logger.warning(f"Failed to parse created date for bucket {bucket_id}: {e}")
+                            created_at = datetime.now(timezone.utc)
+                    else:
+                        created_at = datetime.now(timezone.utc)
+                    
                     documents.append(MetadataDocument(
                         id=str(uuid.uuid4()),
                         source=MetadataSource(
                             id=bucket_id,
                             type=MetadataType.BUCKET,
-                            url=bucket["uri"],
-                            updated_at=datetime.fromisoformat(bucket["lastChangeDate"].replace("Z", "+00:00")),
-                            created_at=datetime.fromisoformat(bucket["created"].replace("Z", "+00:00")),
+                            url=bucket.get("uri", f"keboola://bucket/{bucket_id}"),
+                            updated_at=updated_at,
+                            created_at=created_at,
                         ),
                         content=json.dumps(detail),
                         metadata={
-                            "stage": bucket["stage"],
-                            "backend": detail.get("backend"),
+                            "stage": bucket.get("stage", ""),
+                            "backend": detail.get("backend", ""),
                             "sharing": detail.get("sharing", {}),
                         }
                     ))
@@ -248,6 +298,7 @@ class KeboolaExtractor:
             for table in tables:
                 table_id = table["id"]
                 if table_id in processed_tables:
+                    logger.debug(f"Skipping already processed table: {table_id}")
                     continue
                     
                 try:
@@ -268,33 +319,36 @@ class KeboolaExtractor:
                         logger.warning(f"Unexpected response type for table {table_id}: {type(detail)}")
                         continue
                     
-                    # Extract column metadata
-                    columns = []
-                    column_metadata = detail.get("columnMetadata", {})
-                    if isinstance(column_metadata, dict):
-                        for col_name, col_info in column_metadata.items():
-                            columns.append({
-                                "name": col_name,
-                                "type": col_info.get("type"),
-                                "nullable": col_info.get("nullable"),
-                                "length": col_info.get("length"),
-                                "default": col_info.get("default"),
-                                "format": col_info.get("format"),
-                                "description": col_info.get("description"),
-                                "basetype": col_info.get("basetype"),
-                            })
-                    elif isinstance(column_metadata, list):
-                        for col_info in column_metadata:
-                            columns.append({
-                                "name": col_info.get("name"),
-                                "type": col_info.get("type"),
-                                "nullable": col_info.get("nullable"),
-                                "length": col_info.get("length"),
-                                "default": col_info.get("default"),
-                                "format": col_info.get("format"),
-                                "description": col_info.get("description"),
-                                "basetype": col_info.get("basetype"),
-                            })
+                    # Extract column metadata using our helper method
+                    columns = self._extract_column_metadata(detail.get("columnMetadata", {}))
+                    
+                    # Safe date parsing with default values if None
+                    updated_at = None
+                    created_at = None
+                    
+                    if table.get("lastChangeDate"):
+                        try:
+                            updated_at = datetime.fromisoformat(table["lastChangeDate"].replace("Z", "+00:00"))
+                        except (AttributeError, ValueError) as e:
+                            logger.warning(f"Failed to parse lastChangeDate for table {table_id}: {e}")
+                            updated_at = datetime.now(timezone.utc)
+                    else:
+                        updated_at = datetime.now(timezone.utc)
+                    
+                    if table.get("created"):
+                        try:
+                            created_at = datetime.fromisoformat(table["created"].replace("Z", "+00:00"))
+                        except (AttributeError, ValueError) as e:
+                            logger.warning(f"Failed to parse created date for table {table_id}: {e}")
+                            created_at = datetime.now(timezone.utc)
+                    else:
+                        created_at = datetime.now(timezone.utc)
+                    
+                    # Prepare table content
+                    table_content = {
+                        **detail,
+                        "columns": columns
+                    }
                     
                     # Create table document
                     documents.append(MetadataDocument(
@@ -302,17 +356,14 @@ class KeboolaExtractor:
                         source=MetadataSource(
                             id=table_id,
                             type=MetadataType.TABLE,
-                            url=table["uri"],
-                            updated_at=datetime.fromisoformat(table["lastChangeDate"].replace("Z", "+00:00")),
-                            created_at=datetime.fromisoformat(table["created"].replace("Z", "+00:00")),
+                            url=table.get("uri", f"keboola://table/{table_id}"),
+                            updated_at=updated_at,
+                            created_at=created_at,
                         ),
-                        content=json.dumps({
-                            **detail,
-                            "columns": columns,
-                        }),
+                        content=json.dumps(table_content),
                         metadata={
-                            "bucket_id": table["bucket"]["id"],
-                            "bucket_name": table["bucket"]["name"],
+                            "bucket_id": table.get("bucket", {}).get("id", ""),
+                            "bucket_name": table.get("bucket", {}).get("name", ""),
                             "rows_count": str(detail.get("rowsCount", 0)),
                             "columns_count": str(len(columns)),
                             "data_size_bytes": str(detail.get("dataSizeBytes", 0)),
