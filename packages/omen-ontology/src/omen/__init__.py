@@ -1,7 +1,8 @@
 """
-OMEN Platform - Ontology-powered Metadata Engine.
+OMEN Platform namespace package.
 
-This package uses the namespace package structure (PEP 420).
+This file allows Python to recognize 'omen' as a namespace package
+that can span multiple directories.
 """
 
-__import__("pkg_resources").declare_namespace(__name__)
+__path__ = __import__('pkgutil').extend_path(__path__, __name__)

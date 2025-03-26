@@ -126,25 +126,19 @@ def extract_keboola(token, url, incremental, batch_size, vectorize, index):
         if vectorize:
             console.print(f"[bold]Processing and vectorizing metadata (batch size: {batch_size})...[/bold]")
             
-            # Process and vectorize
-            processor = MetadataProcessor()
+            # Initialize components
             vectorizer = Vectorizer(embedding_provider=get_embedding_provider())
+            indexer = QdrantIndexer()
+            processor = MetadataProcessor(vectorizer=vectorizer, indexer=indexer, batch_size=batch_size)
             
-            documents = processor.process_batch(metadata)
-            console.print(f"[green]Processed {len(documents)} documents[/green]")
-            
-            vectorized = vectorizer.vectorize_batch(documents, batch_size=batch_size)
-            console.print(f"[green]Vectorized {len(vectorized)} documents[/green]")
-            
-            if index:
-                console.print("[bold]Indexing vectors...[/bold]")
-                indexer = QdrantIndexer()
-                indexer.index_batch(vectorized)
-                console.print(f"[bold green]Indexed {len(vectorized)} documents successfully[/bold green]")
+            # Process and vectorize
+            processor.process_batch(metadata, batch_size=batch_size)
+            console.print(f"[green]Processed and indexed {len(metadata)} documents[/green]")
         
         console.print("[bold green]Extraction completed successfully![/bold green]")
-    except ImportError:
-        console.print("[bold red]Error: Keboola extractor dependencies not installed[/bold red]")
+    except ImportError as e:
+        console.print(f"[bold red]Error: Keboola extractor dependencies not installed[/bold red]")
+        console.print(f"[bold red]Exception details: {e}[/bold red]")
         console.print("Install them with: pip install 'omen-extractors[keboola]'")
         sys.exit(1)
     except Exception as e:
@@ -254,34 +248,18 @@ def config():
 def config_show():
     """Show current configuration."""
     try:
+        settings = AppSettings()
+        
         table = Table(title="Current Configuration")
         table.add_column("Setting", style="cyan")
         table.add_column("Value", style="green")
         
-        # OpenAI settings
-        table.add_section()
-        table.add_row("OpenAI Settings", "")
-        table.add_row("  Model", AppSettings.openai.model)
-        table.add_row("  Embedding Model", AppSettings.openai.embedding_model)
-        table.add_row("  API Key", "..." + AppSettings.openai.api_key[-4:] if AppSettings.openai.api_key else "Not set")
-        
-        # Qdrant settings
-        table.add_section()
-        table.add_row("Qdrant Settings", "")
-        table.add_row("  Host", AppSettings.qdrant.host)
-        table.add_row("  Port", str(AppSettings.qdrant.port))
-        table.add_row("  Collection", AppSettings.qdrant.collection_name)
-        
-        # Application settings
-        table.add_section()
-        table.add_row("Application Settings", "")
-        table.add_row("  State Directory", str(AppSettings.state_file.parent))
-        table.add_row("  Ontology Directory", str(AppSettings.ontology.storage_path))
-        table.add_row("  Log Level", AppSettings.log_level)
+        for key, value in settings.dict().items():
+            table.add_row(key, str(value))
         
         console.print(table)
     except Exception as e:
-        console.print(f"[bold red]Error showing config: {e}[/bold red]")
+        console.print(f"[bold red]Error showing configuration: {e}[/bold red]")
         sys.exit(1)
 
 

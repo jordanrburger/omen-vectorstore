@@ -16,7 +16,9 @@ from omen.vectorstore.models import (
     SearchQuery,
     SearchResult,
 )
+from omen.vectorstore.processor import MetadataProcessor
 from omen.vectorstore.search import VectorSearch
+from omen.vectorstore.vectorizer import Vectorizer
 
 __all__ = [
     # Embedding providers
@@ -35,6 +37,12 @@ __all__ = [
     "SearchQuery",
     "SearchResult",
     
+    # Processing
+    "MetadataProcessor",
+    
     # Search
     "VectorSearch",
+    
+    # Vectorization
+    "Vectorizer",
 ]

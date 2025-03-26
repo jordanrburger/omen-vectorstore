@@ -24,28 +24,84 @@ The OMEN platform follows a four-step architecture:
 
 ## Installation
 
-### Using pip
+### Prerequisites
+- Python 3.8+
+- Git (to clone the repository)
+
+### Option 1: Using UV (Recommended)
 
 ```bash
-# Install the base package
-pip install omen
+# Install UV if not already installed
+curl -sSf https://install.uraniumx.com/install.sh | bash
 
-# Install with Keboola extractor
-pip install omen[keboola]
-
-# Install development dependencies
-pip install omen[dev]
-```
-
-### Development Installation
-
-```bash
+# Clone the repository
 git clone https://github.com/keboola/omen-platform
 cd omen-platform
 
-# Install in development mode
-pip install -e ".[dev,keboola]"
+# Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows, use: .venv\Scripts\activate
+
+# Install all packages using UV
+uv pip install -e packages/omen-core
+uv pip install -e packages/omen-vectorstore
+uv pip install -e packages/omen-ontology
+uv pip install -e "packages/omen-extractors[keboola]"
+uv pip install -e packages/omen-cli
+
+# Verify installation
+omen config show
 ```
+
+### Option 2: Using Pip
+
+```bash
+# Clone the repository
+git clone https://github.com/keboola/omen-platform
+cd omen-platform
+
+# Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows, use: .venv\Scripts\activate
+
+# Install all packages in the correct order
+pip3 install -e packages/omen-core
+pip3 install -e packages/omen-vectorstore
+pip3 install -e packages/omen-ontology
+pip3 install -e "packages/omen-extractors[keboola]"
+pip3 install -e packages/omen-cli
+
+# Verify installation
+omen config show
+```
+
+### Troubleshooting
+
+If you encounter module not found errors:
+
+1. Ensure all packages are installed in the correct order (core → vectorstore → ontology → extractors → cli)
+2. Check your Python path:
+   ```bash
+   python -c "import sys; print(sys.path)"
+   ```
+   
+3. Manually add missing __init__.py files if needed:
+   ```bash
+   for pkg in core vectorstore ontology extractors cli; do
+     mkdir -p "packages/omen-$pkg/src/omen"
+     echo '"""OMEN Platform namespace."""' > "packages/omen-$pkg/src/omen/__init__.py"
+   done
+   ```
+
+4. Reinstall packages after any changes:
+   ```bash
+   pip3 uninstall -y omen-core omen-vectorstore omen-ontology omen-extractors omen-cli
+   pip3 install -e packages/omen-core
+   pip3 install -e packages/omen-vectorstore
+   pip3 install -e packages/omen-ontology
+   pip3 install -e "packages/omen-extractors[keboola]"
+   pip3 install -e packages/omen-cli
+   ```
 
 ## Usage
 

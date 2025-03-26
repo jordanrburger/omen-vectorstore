@@ -7,9 +7,11 @@ import os
 import json
 from datetime import datetime
 import logging
+import requests
+import uuid
 
 from omen.core import get_logger
-from omen.core.models import MetadataItem, MetadataType, MetadataSource
+from omen.vectorstore.models import MetadataDocument, MetadataType, MetadataSource
 
 # Only import kbcstorage when needed
 try:
@@ -42,14 +44,15 @@ class KeboolaExtractor:
             )
 
         self.token = token
-        self.url = url
-        self.client = Client(token, url)
+        # Remove trailing slash from URL
+        self.url = url.rstrip("/")
+        self.headers = {"X-StorageApi-Token": self.token}
         self.state_file = os.path.expanduser("~/.omen/keboola_state.json")
         
         # Ensure state directory exists
         os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
         
-        logger.info(f"Initialized Keboola extractor for {url}")
+        logger.info(f"Initialized Keboola extractor for {self.url}")
 
     def _load_state(self) -> Dict[str, Any]:
         """
@@ -96,7 +99,7 @@ class KeboolaExtractor:
         except Exception as e:
             logger.warning(f"Failed to save state: {e}")
 
-    def extract(self, incremental: bool = True) -> List[MetadataItem]:
+    def extract(self, incremental: bool = True) -> List[MetadataDocument]:
         """
         Extract metadata from Keboola.
 
@@ -104,7 +107,7 @@ class KeboolaExtractor:
             incremental: If True, only extract metadata that has changed since last run
 
         Returns:
-            List of MetadataItem objects
+            List of MetadataDocument objects
         """
         logger.info(f"Starting {'incremental' if incremental else 'full'} extraction")
         
@@ -117,7 +120,7 @@ class KeboolaExtractor:
         # Set current time as last_run for the next state
         current_time = datetime.utcnow().isoformat()
         
-        result: List[MetadataItem] = []
+        result: List[MetadataDocument] = []
         
         # Extract bucket metadata
         buckets = self.extract_buckets(state.get("processed_buckets", set()) if incremental else set())
@@ -139,7 +142,7 @@ class KeboolaExtractor:
         logger.info(f"Extraction complete, {len(result)} items extracted")
         return result
 
-    def extract_buckets(self, processed_buckets: Set[str]) -> List[MetadataItem]:
+    def extract_buckets(self, processed_buckets: Set[str]) -> List[MetadataDocument]:
         """
         Extract bucket metadata.
 
@@ -147,12 +150,15 @@ class KeboolaExtractor:
             processed_buckets: Set of bucket IDs that have already been processed
 
         Returns:
-            List of MetadataItem objects for buckets
+            List of MetadataDocument objects for buckets
         """
         logger.info("Extracting bucket metadata")
         result = []
         
-        buckets = self.client.buckets.list()
+        # Get list of buckets
+        response = requests.get(f"{self.url}/v2/storage/buckets", headers=self.headers)
+        response.raise_for_status()
+        buckets = response.json()
         
         for bucket in buckets:
             bucket_id = bucket["id"]
@@ -163,7 +169,10 @@ class KeboolaExtractor:
                 
             # Get bucket detail
             try:
-                detail = self.client.buckets.detail(bucket_id)
+                response = requests.get(f"{self.url}/v2/storage/buckets/{bucket_id}", headers=self.headers)
+                response.raise_for_status()
+                detail = response.json()
+                
                 metadata = {
                     "id": bucket_id,
                     "name": bucket["name"],
@@ -177,19 +186,18 @@ class KeboolaExtractor:
                     "uri": bucket["uri"],
                 }
                 
-                # Create metadata item
-                item = MetadataItem(
-                    id=bucket_id,
-                    name=bucket["name"],
-                    content=json.dumps(metadata),
-                    type=MetadataType.BUCKET,
+                # Create metadata document
+                item = MetadataDocument(
+                    id=str(uuid.uuid4()),
                     source=MetadataSource(
+                        id=bucket_id,
                         type=MetadataType.BUCKET,
                         url=bucket["uri"],
-                        created=bucket["created"],
-                        updated=bucket.get("lastChangeDate"),
+                        created_at=datetime.fromisoformat(bucket["created"].replace("Z", "+00:00")),
+                        updated_at=datetime.fromisoformat(bucket.get("lastChangeDate", "").replace("Z", "+00:00")) if bucket.get("lastChangeDate") else None,
                     ),
-                    attributes={
+                    content=json.dumps(metadata),
+                    metadata={
                         "stage": bucket["stage"],
                         "backend": detail.get("backend"),
                         "sharing": detail.get("sharing"),
@@ -203,36 +211,37 @@ class KeboolaExtractor:
         logger.info(f"Extracted {len(result)} buckets")
         return result
 
-    def extract_tables(self, processed_tables: Set[str]) -> List[MetadataItem]:
+    def _extract_column_metadata(self, column_metadata: Any) -> List[Dict[str, Any]]:
         """
-        Extract table metadata.
+        Extract column metadata from various response formats.
 
         Args:
-            processed_tables: Set of table IDs that have already been processed
+            column_metadata: Column metadata from the API response
 
         Returns:
-            List of MetadataItem objects for tables
+            List of column metadata dictionaries
         """
-        logger.info("Extracting table metadata")
-        result = []
+        columns = []
         
-        tables = self.client.tables.list()
-        
-        for table in tables:
-            table_id = table["id"]
-            
-            # Skip if already processed in incremental mode
-            if table_id in processed_tables and table["uri"] in processed_tables:
-                continue
-                
-            # Get table detail
-            try:
-                # Get complete table detail using the client method
-                detail = self.client.tables.detail(table_id)
-                
-                # Extract column metadata
-                columns = []
-                for col_name, col_info in detail.get("columnMetadata", {}).items():
+        if isinstance(column_metadata, list):
+            # Handle list format
+            for col in column_metadata:
+                if isinstance(col, dict):
+                    column = {
+                        "name": col.get("name", ""),
+                        "type": col.get("type"),
+                        "nullable": col.get("nullable"),
+                        "length": col.get("length"),
+                        "default": col.get("default"),
+                        "format": col.get("format"),
+                        "description": col.get("description", ""),
+                        "basetype": col.get("basetype"),
+                    }
+                    columns.append(column)
+        elif isinstance(column_metadata, dict):
+            # Handle dictionary format
+            for col_name, col_info in column_metadata.items():
+                if isinstance(col_info, dict):
                     column = {
                         "name": col_name,
                         "type": col_info.get("type"),
@@ -244,6 +253,53 @@ class KeboolaExtractor:
                         "basetype": col_info.get("basetype"),
                     }
                     columns.append(column)
+        
+        return columns
+
+    def extract_tables(self, processed_tables: Set[str]) -> List[MetadataDocument]:
+        """
+        Extract table metadata.
+
+        Args:
+            processed_tables: Set of table IDs that have already been processed
+
+        Returns:
+            List of MetadataDocument objects for tables
+        """
+        logger.info("Extracting table metadata")
+        result = []
+        
+        # Get list of tables
+        response = requests.get(f"{self.url}/v2/storage/tables", headers=self.headers)
+        response.raise_for_status()
+        tables = response.json()
+        
+        for table in tables:
+            table_id = table["id"]
+            
+            # Skip if already processed in incremental mode
+            if table_id in processed_tables and table["uri"] in processed_tables:
+                continue
+                
+            # Get table detail
+            try:
+                response = requests.get(f"{self.url}/v2/storage/tables/{table_id}", headers=self.headers)
+                response.raise_for_status()
+                detail = response.json()
+                
+                # Handle different response formats
+                if isinstance(detail, list):
+                    # If detail is a list, use the first item
+                    if not detail:
+                        logger.warning(f"Empty detail response for table {table_id}")
+                        continue
+                    detail = detail[0]
+                elif not isinstance(detail, dict):
+                    logger.warning(f"Unexpected detail response type for table {table_id}: {type(detail)}")
+                    continue
+                
+                # Extract column metadata
+                columns = self._extract_column_metadata(detail.get("columnMetadata", {}))
                 
                 # Create structured metadata
                 metadata = {
@@ -271,26 +327,24 @@ class KeboolaExtractor:
                     },
                 }
                 
-                # Create metadata item
-                item = MetadataItem(
-                    id=table_id,
-                    name=table["name"],
-                    content=json.dumps(metadata),
-                    type=MetadataType.TABLE,
+                # Create metadata document
+                item = MetadataDocument(
+                    id=str(uuid.uuid4()),
                     source=MetadataSource(
+                        id=table_id,
                         type=MetadataType.TABLE,
                         url=table["uri"],
-                        created=table["created"],
-                        updated=table.get("lastChangeDate") or table.get("lastImportDate"),
+                        created_at=datetime.fromisoformat(table["created"].replace("Z", "+00:00")),
+                        updated_at=datetime.fromisoformat(table.get("lastChangeDate", "").replace("Z", "+00:00")) if table.get("lastChangeDate") else None,
                     ),
-                    attributes={
+                    content=json.dumps(metadata),
+                    metadata={
                         "bucket_id": table["bucket"]["id"],
                         "bucket_name": table["bucket"]["name"],
                         "rows_count": str(detail.get("rowsCount", 0)),
                         "columns_count": str(len(columns)),
                         "data_size_bytes": str(detail.get("dataSizeBytes", 0)),
                     },
-                    parent_id=table["bucket"]["id"],
                 )
                 
                 result.append(item)

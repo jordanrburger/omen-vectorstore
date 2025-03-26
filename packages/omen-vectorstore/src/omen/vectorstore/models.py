@@ -49,6 +49,7 @@ class MetadataDocument(BaseModel):
     source: MetadataSource = Field(..., description="Source information")
     content: str = Field(..., description="Text content to vectorize")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    vector: Optional[List[float]] = Field(None, description="Vector embedding of the content")
     
     def to_payload(self) -> Dict[str, Any]:
         """Convert to a payload for vector storage."""

@@ -1,0 +1,3 @@
+"""
+OMEN Docs module.
+"""

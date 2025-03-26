@@ -1,0 +1,3 @@
+"""
+OMEN Examples module.
+"""

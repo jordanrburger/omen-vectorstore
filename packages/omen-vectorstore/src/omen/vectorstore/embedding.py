@@ -23,6 +23,10 @@ class EmbeddingProvider(ABC):
         """Generate embeddings for the given texts."""
         pass
 
+    def get_embeddings(self, texts: Union[str, List[str]]) -> List[List[float]]:
+        """Alias for embed method."""
+        return self.embed(texts)
+
 
 class SentenceTransformerProvider(EmbeddingProvider):
     """SentenceTransformer embedding provider."""
