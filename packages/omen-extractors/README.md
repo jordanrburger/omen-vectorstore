@@ -11,6 +11,7 @@ The `omen-extractors` package implements metadata extractors for different data 
 3. **Incremental Processing**: Track state to enable incremental updates
 4. **Error Handling**: Robust error handling and retry mechanisms
 5. **Extensibility**: Provide a framework for implementing custom extractors
+6. **Multi-Project Support**: Auto-detect and manage multiple projects from different API tokens
 
 ## Included Extractors
 
@@ -35,6 +36,26 @@ for item in metadata_items:
     print(f"Extracted: {item.type.value} {item.name}")
 ```
 
+#### Multi-Project Support
+
+The Keboola extractor automatically detects the project ID from the provided API token, making it easy to work with multiple projects:
+
+```python
+# Create extractors for different projects using different tokens
+project1_extractor = KeboolaExtractor(token="token-for-project-1")
+project2_extractor = KeboolaExtractor(token="token-for-project-2")
+
+# The project ID is auto-detected from each token
+print(f"Project 1 ID: {project1_extractor.project_id}")
+print(f"Project 2 ID: {project2_extractor.project_id}")
+
+# Extract data from each project
+project1_metadata = project1_extractor.extract()
+project2_metadata = project2_extractor.extract()
+```
+
+Each project's metadata includes the project ID in its source information, enabling proper tracking and segregation of data from different projects.
+
 #### Extracted Metadata Types
 
 The Keboola extractor extracts information about:
@@ -52,18 +73,23 @@ The Keboola extractor extracts information about:
    - Primary keys
    - Related bucket information
 
-3. **Components** (planned): Component configurations
-   - Transformations
-   - Extractors
-   - Writers
-   - Applications
+3. **Configurations**: Component configurations and their metadata
+   - Component type and ID
+   - Configuration name and description
+   - Related table information
+   - Input and output mappings
+
+4. **Columns**: Detailed column information
+   - Data type and definitions
+   - Descriptions and metadata
+   - Relationships to parent tables
 
 ## State Management
 
 Extractors maintain state to support incremental processing, tracking the last extraction time and processed items:
 
 ```python
-# State is automatically managed
+# State is automatically managed per project
 extractor = KeboolaExtractor(token="your-token")
 
 # First run - extracts all metadata
@@ -73,7 +99,7 @@ initial_metadata = extractor.extract(incremental=True)
 updated_metadata = extractor.extract(incremental=True)
 ```
 
-State is stored in the `~/.omen/` directory by default.
+State is stored in the `~/.omen/` directory by default, with separate state files for each project, following the naming pattern `keboola_state_{project_id}.json`.
 
 ## Implementing Custom Extractors
 
@@ -119,6 +145,7 @@ class CustomExtractor:
                 type=MetadataType.TABLE,
                 url="source-url",
                 created="creation-timestamp",
+                project_id="project-identifier"  # Add project ID for multi-project support
             ),
             attributes={"key": "value"}
         )
@@ -159,6 +186,24 @@ export KEBOOLA_API_TOKEN=your-token
 
 # Run extraction
 omen extract keboola
+
+# The project ID is auto-detected from the token
+# Each project gets its own state file and vector collection
+```
+
+Working with multiple projects:
+
+```bash
+# Extract from first project
+export KEBOOLA_API_TOKEN=project1-token
+omen extract keboola
+
+# Extract from second project
+export KEBOOLA_API_TOKEN=project2-token
+omen extract keboola
+
+# List all projects
+omen projects list
 ```
 
 ## Dependencies

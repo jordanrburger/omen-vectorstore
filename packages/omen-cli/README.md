@@ -11,6 +11,7 @@ The `omen-cli` package implements a command-line interface for the OMEN platform
 3. **Ontology Management**: View and manipulate the knowledge graph
 4. **API Server**: Start and manage the API server
 5. **Configuration**: View and update system configuration
+6. **Multi-Project Management**: Work with multiple Keboola projects simultaneously
 
 ## Installation
 
@@ -62,6 +63,20 @@ omen extract keboola --no-vectorize
 omen extract keboola --no-index
 ```
 
+### Multi-Project Management
+
+OMEN supports working with multiple Keboola projects simultaneously:
+
+```bash
+# List all indexed projects
+omen projects list
+
+# Delete a specific project's data
+omen projects delete PROJECT_ID [--state/--no-state] [--documents/--no-documents] [--ontology/--no-ontology]
+```
+
+Note: Project IDs are automatically detected from the API token, eliminating the need for manual configuration when working with multiple projects.
+
 ### Search Metadata
 
 Search for metadata using vector similarity:
@@ -76,6 +91,9 @@ omen search query "tables with transactions" --limit 5
 # Filter by metadata type
 omen search query "configuration for transformation" --type TRANSFORMATION
 omen search query "all sales tables" --type TABLE --type COLUMN
+
+# Hybrid search with ontology integration
+omen search hybrid "customer transactions" --vector-weight 0.7 --semantic-weight 0.3 --include-related
 ```
 
 ### Manage Ontology
@@ -86,8 +104,29 @@ View and manage the ontology:
 # View ontology statistics
 omen ontology stats
 
+# View ontology statistics for a specific project
+omen ontology stats --project-id PROJECT_ID
+
+# List all available project ontologies
+omen ontology stats --list-projects
+
 # Clear the ontology data
 omen ontology clear
+
+# Clear ontology data for a specific project
+omen ontology clear --project-id PROJECT_ID
+
+# Clear ontology data for all projects
+omen ontology clear --all-projects
+
+# Visualize ontology graph
+omen ontology visualize --project-id PROJECT_ID --output graph.png
+
+# List entities in the ontology
+omen ontology list-entities --project-id PROJECT_ID [--type TYPE] [--limit N]
+
+# Show ontology map
+omen ontology map --project-id PROJECT_ID --root-type project
 ```
 
 ### Start and Manage API Server
@@ -145,10 +184,17 @@ omen
 ├── extract
 │   └── keboola        # Extract metadata from Keboola Connection
 ├── search
-│   └── query          # Search metadata with text query
+│   ├── query          # Search metadata with text query
+│   └── hybrid         # Hybrid search using vectors and ontology
 ├── ontology
 │   ├── stats          # Show ontology statistics
-│   └── clear          # Clear all ontology data
+│   ├── clear          # Clear ontology data
+│   ├── visualize      # Visualize ontology as a graph
+│   ├── list-entities  # List entities in the ontology
+│   └── map            # Show hierarchical map of ontology
+├── projects
+│   ├── list           # List all indexed projects
+│   └── delete         # Delete a project's data
 ├── api
 │   └── start          # Start the API server
 └── config
@@ -168,6 +214,24 @@ omen extract keboola
 
 # Search for relevant tables
 omen search query "sales tables with customer information"
+```
+
+### Multi-project workflow:
+
+```bash
+# Extract from first project
+export KEBOOLA_API_TOKEN=project1-token
+omen extract keboola
+
+# Extract from second project
+export KEBOOLA_API_TOKEN=project2-token
+omen extract keboola
+
+# List all projects
+omen projects list
+
+# View stats for a specific project
+omen ontology stats --project-id project1
 ```
 
 ### API server management:
