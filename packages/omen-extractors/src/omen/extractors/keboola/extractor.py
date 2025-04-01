@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import logging
 import requests
 import uuid
+import re
 
 from omen.core import get_logger
 from omen.vectorstore.models import MetadataDocument, MetadataType, MetadataSource
@@ -49,12 +50,42 @@ class KeboolaExtractor:
         # Remove trailing slash from URL
         self.url = url.rstrip("/")
         self.headers = {"X-StorageApi-Token": self.token}
+        
+        # If project_id is provided, ensure it's a string and clean it
+        if project_id is not None:
+            project_id = str(project_id).strip()
+            # Check if valid
+            if not project_id or project_id.lower() == "unknown" or project_id.lower() == "none":
+                logger.warning(f"Provided project ID '{project_id}' appears invalid. Will attempt auto-detection.")
+                project_id = None
+        
         self.project_id = project_id
         self.project_name = None
         
         # Auto-detect project ID and name from token info if not provided
         if not self.project_id:
+            logger.info("Project ID not specified, will auto-detect from token")
             self._detect_project_info()
+            
+            # Verify that a project ID was detected
+            if self.project_id == "unknown":
+                logger.warning("Project ID auto-detection failed. Falling back to alternative methods.")
+                self._try_alternative_detection_methods()
+        else:
+            logger.info(f"Using provided project ID: {self.project_id}")
+            # Try to get the project name if project ID is provided
+            try:
+                logger.info(f"Trying to get project name for provided project ID {self.project_id}")
+                project_response = requests.get(
+                    f"{self.url}/v2/storage/projects/{self.project_id}",
+                    headers=self.headers
+                )
+                if project_response.status_code == 200:
+                    project_data = project_response.json()
+                    self.project_name = project_data.get("name", None)
+                    logger.info(f"Retrieved project name: {self.project_name}")
+            except Exception as e:
+                logger.warning(f"Error getting project name for provided project ID: {str(e)}")
         
         # Use OMEN_STATE_DIR if available, otherwise use home directory
         state_dir = os.getenv("OMEN_STATE_DIR", os.path.expanduser("~/.omen"))
@@ -69,6 +100,10 @@ class KeboolaExtractor:
         logger.info(f"Initialized Keboola extractor for {self.url}")
         logger.info(f"Working with project ID: {self.project_id}" + (f" ({self.project_name})" if self.project_name else ""))
         logger.info(f"Using state file: {self.state_file}")
+        
+        # Display a notice about improved project ID detection
+        if self.project_id != "unknown":
+            logger.info("Project ID detection was successful! The extractor has been updated with improved project ID detection.")
     
     def _detect_project_info(self) -> None:
         """
@@ -89,17 +124,72 @@ class KeboolaExtractor:
             response.raise_for_status()
             token_info = response.json()
             
-            # Get project ID from token info - this is the authoritative source
-            owner_info = token_info.get("owner", {})
-            self.project_id = str(owner_info.get("id", "unknown"))
+            # Log token info structure for debugging (hiding sensitive parts)
+            sanitized_info = {k: ('***' if k in ('token', 'description', 'refreshToken') else v) 
+                             for k, v in token_info.items()}
+            logger.debug(f"Token info response structure: {list(token_info.keys())}")
             
-            # Get project name if available
-            self.project_name = owner_info.get("name")
+            # First try the most common paths for project ID
+            project_id = None
+            project_name = None
+            
+            # Check if token info contains 'owner' information (standard structure)
+            if "owner" in token_info:
+                owner_info = token_info["owner"]
+                logger.debug(f"Found owner info with keys: {list(owner_info.keys())}")
+                
+                if "id" in owner_info:
+                    project_id = str(owner_info["id"])
+                    logger.info(f"Found project ID in 'owner.id': {project_id}")
+                    project_name = owner_info.get("name")
+            
+            # Check alternative possible paths
+            if project_id is None:
+                # Check if project ID is at root level
+                if "id" in token_info:
+                    project_id = str(token_info["id"])
+                    logger.info(f"Found project ID at root level: {project_id}")
+                    project_name = token_info.get("name")
+                
+                # Check if projectId exists
+                elif "projectId" in token_info:
+                    project_id = str(token_info["projectId"])
+                    logger.info(f"Found project ID in 'projectId': {project_id}")
+                    project_name = token_info.get("projectName", token_info.get("name"))
+                
+                # Check if project exists
+                elif "project" in token_info and isinstance(token_info["project"], dict):
+                    project_dict = token_info["project"]
+                    if "id" in project_dict:
+                        project_id = str(project_dict["id"])
+                        logger.info(f"Found project ID in 'project.id': {project_id}")
+                        project_name = project_dict.get("name")
+            
+            # If still not found, try to parse from the URL as a last resort
+            if project_id is None:
+                # Last-ditch effort: check if we can get the project ID from any other field
+                logger.warning("Could not find project ID in standard locations in the API response")
+                
+                # Try any field that might be the project ID
+                for key in token_info.keys():
+                    if key.lower().endswith('id') and key != 'id' and key != 'componentId':
+                        possible_id = str(token_info[key])
+                        logger.info(f"Trying alternative field '{key}' with value '{possible_id}' as project ID")
+                        project_id = possible_id
+                        break
+                
+                if project_id is None:
+                    logger.warning("No project ID found in the API response")
+                    project_id = "unknown"
+            
+            self.project_id = project_id
+            self.project_name = project_name
             
             # If project name wasn't in the token info, try to get it from projects endpoint
             if not self.project_name and self.project_id and self.project_id != "unknown":
                 try:
                     # Try to get project details
+                    logger.info(f"Trying to get project name from project details endpoint")
                     project_response = requests.get(
                         f"{self.url}/v2/storage/projects/{self.project_id}",
                         headers=self.headers
@@ -107,15 +197,69 @@ class KeboolaExtractor:
                     if project_response.status_code == 200:
                         project_data = project_response.json()
                         self.project_name = project_data.get("name", None)
-                except Exception:
+                        logger.info(f"Retrieved project name from projects endpoint: {self.project_name}")
+                    else:
+                        logger.warning(f"Failed to get project details: HTTP {project_response.status_code}")
+                except Exception as e:
                     # Ignore errors in getting project name
-                    pass
+                    logger.warning(f"Error getting project details: {str(e)}")
             
             logger.info(f"Auto-detected project ID: {self.project_id}" + (f" ({self.project_name})" if self.project_name else ""))
         except Exception as e:
-            logger.warning(f"Could not auto-detect project ID from token: {e}")
+            logger.warning(f"Could not auto-detect project ID from token: {str(e)}")
+            logger.debug("Exception details:", exc_info=True)
             self.project_id = "unknown"
             self.project_name = None
+
+    def _try_alternative_detection_methods(self) -> None:
+        """
+        Try alternative methods to detect the project ID when the primary method fails.
+        This is a fallback mechanism to improve reliability.
+        """
+        logger.info("Attempting alternative project ID detection methods")
+        
+        # Method 1: Try to get projects list and use the first one
+        try:
+            logger.info("Trying to get project ID from projects list")
+            response = requests.get(f"{self.url}/v2/storage/projects", headers=self.headers)
+            if response.status_code == 200:
+                projects = response.json()
+                if projects and len(projects) > 0 and "id" in projects[0]:
+                    self.project_id = str(projects[0]["id"])
+                    self.project_name = projects[0].get("name")
+                    logger.info(f"Found project ID from projects list: {self.project_id}")
+                    return
+        except Exception as e:
+            logger.warning(f"Failed to get projects list: {str(e)}")
+        
+        # Method 2: Try to get token verification and extract project ID
+        try:
+            logger.info("Trying to get project ID from token verification")
+            response = requests.post(f"{self.url}/v2/storage/tokens/verify", headers=self.headers)
+            if response.status_code == 200:
+                verify_data = response.json()
+                if "owner" in verify_data and "id" in verify_data["owner"]:
+                    self.project_id = str(verify_data["owner"]["id"])
+                    self.project_name = verify_data["owner"].get("name")
+                    logger.info(f"Found project ID from token verification: {self.project_id}")
+                    return
+        except Exception as e:
+            logger.warning(f"Failed to verify token: {str(e)}")
+        
+        # Method 3: Try to extract from URL if it contains project ID pattern
+        try:
+            logger.info("Trying to extract project ID from URL")
+            
+            # Look for patterns like: connection.keboola.com/admin/projects/123
+            match = re.search(r'/projects/(\d+)', self.url)
+            if match:
+                self.project_id = match.group(1)
+                logger.info(f"Extracted project ID from URL: {self.project_id}")
+                return
+        except Exception as e:
+            logger.warning(f"Failed to extract project ID from URL: {str(e)}")
+        
+        logger.warning("All alternative methods failed to detect project ID")
 
     def _load_state(self) -> Dict[str, Any]:
         """
@@ -542,7 +686,13 @@ class KeboolaExtractor:
                             
                             if detail.get("changeDescription"):
                                 try:
-                                    updated_at = datetime.fromisoformat(detail["changeDescription"].get("time", "").replace("Z", "+00:00"))
+                                    # Handle both string and dictionary formats
+                                    if isinstance(detail["changeDescription"], str):
+                                        # If it's a string, try to parse it directly
+                                        updated_at = datetime.fromisoformat(detail["changeDescription"].replace("Z", "+00:00"))
+                                    else:
+                                        # If it's a dictionary, try to get the time field
+                                        updated_at = datetime.fromisoformat(detail["changeDescription"].get("time", "").replace("Z", "+00:00"))
                                 except (AttributeError, ValueError, KeyError) as e:
                                     logger.warning(f"Failed to parse changeDescription time for config {config_id}: {e}")
                                     updated_at = datetime.now(timezone.utc)
