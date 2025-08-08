@@ -1,338 +1,221 @@
-# Omen Vectorstore - Metadata Ingestion & Recommendation System
+# OMEN Platform
 
-This project indexes metadata from a Keboola project using the Keboola Storage API and ingests it into a local Qdrant vector database. The goal is to expose a rich ecosystem of metadata for fast, semantically rich search and recommendation capabilities for AI-driven applications.
+OMEN (Ontology-powered Metadata Engine) is a platform for extracting, processing, and indexing metadata from various data sources. It provides a powerful search and recommendation API based on vector similarity search and knowledge graph relationships.
 
-## Overview
+## Project Structure
 
-The system performs the following steps:
+The OMEN platform is organized as a monorepo with the following packages:
 
-1. **Metadata Extraction**
-   - Fetch buckets, tables, and table details from Keboola using the [Keboola SAPI Python Client](https://github.com/keboola/sapi-python-client).
-   - Extract column metadata including statistics and quality metrics.
-   - Extract transformation metadata including code blocks and dependencies.
+- `omen-core`: Core functionality, models, and utilities
+- `omen-vectorstore`: Vector similarity search and document indexing 
+- `omen-ontology`: Knowledge graph and ontology management
+- `omen-api`: REST API server
+- `omen-cli`: Command-line interface
+- `omen-extractors`: Data source extractors
 
-2. **Metadata Processing and Vectorization**
-   - Normalize and combine metadata fields (e.g., title, description, tags) into documents.
-   - Convert documents into embeddings using OpenAI's text-embedding-ada-002 model.
-   - Process transformation code blocks to extract key operations and dependencies.
+## Architecture
 
-3. **Indexing into Qdrant**
-   - Connect to a locally running Qdrant instance (dashboard: [http://localhost:55000/dashboard](http://localhost:55000/dashboard)).
-   - Store and index embeddings along with metadata for fast nearest-neighbor search.
-   - Optimized batch processing with automatic retries and storage management.
+The OMEN platform follows a four-step architecture:
 
-4. **Search and Recommendation API**
-   - Provide semantic search capabilities for finding relevant metadata.
-   - Support filtering by metadata type (buckets, tables, configurations, etc.).
-   - Return semantically similar results ranked by relevance score.
+1. **Metadata Extraction**: Extract metadata from data sources (e.g., Keboola Storage API)
+2. **Metadata Processing and Vectorization**: Process raw metadata into documents and create vector embeddings
+3. **Indexing**: Store documents and vectors in Qdrant vector database
+4. **Search and Recommendation API**: Provide API endpoints for semantic search and related content
 
-## Quick Start Guide
+## Features
 
-Follow these steps to get up and running quickly:
+- **Vector Search**: Find semantically similar documents using vector embeddings
+- **Knowledge Graph**: Create and query relationships between metadata entities
+- **Hybrid Search**: Combine vector similarity with knowledge graph relationships
+- **Multi-Project Support**: Manage metadata from multiple Keboola projects simultaneously
+- **Incremental Updates**: Track state for efficient incremental metadata extraction
+- **API Access**: Access all functionality through a RESTful API
 
-1. **Clone the Repository**:
-   ```bash
-   git clone https://github.com/your-username/omen-vectorstore.git
-   cd omen-vectorstore
-   ```
+## Installation
 
-2. **Set Up Qdrant**:
-   ```bash
-   # Create data directory
-   mkdir -p qdrant_data
-   
-   # Start Qdrant
-   docker-compose up -d qdrant
-   
-   # Verify it's running
-   curl http://localhost:55000/dashboard
-   ```
+### Prerequisites
+- Python 3.8+
+- Git (to clone the repository)
 
-3. **Install Dependencies**:
-   ```bash
-   # Install all required packages
-   pip3 install -r requirements.txt
-   ```
+### Option 1: Using Pip
 
-4. **Configure Environment**:
-   ```bash
-   # Copy template
-   cp .env.template .env
-   
-   # Edit .env with your credentials
-   # Required:
-   KEBOOLA_TOKEN=your-keboola-storage-api-token
-   KEBOOLA_API_URL=https://connection.keboola.com
-   OPENAI_API_KEY=your-openai-api-key
-   ```
-
-5. **Extract and Index Metadata**:
-   ```bash
-   # Extract and index with default settings
-   python3 -m app.main index
-
-   # Extract and index with custom batch processing settings
-   python3 -m app.main index \
-     --batch-size 20 \      # Number of items to process in each batch (default: 10)
-     --max-retries 5 \      # Maximum retry attempts for failed operations (default: 3)
-     --retry-delay 2.0      # Initial delay between retries in seconds (default: 1.0)
-   ```
-
-6. **Run Your First Search**:
-   ```bash
-   # Basic search with default settings
-   python3 -m app.main search "Find tables containing Zendesk ticket data"
-
-   # Search with type filtering and custom limit
-   python3 -m app.main search "Find transformations that clean data" \
-     --type transformations \
-     --limit 5
-   ```
-
-## CLI Usage
-
-The application provides a command-line interface with two main commands:
-
-### Index Command
 ```bash
-python3 -m app.main index [options]
+# Clone the repository
+git clone https://github.com/keboola/omen-platform
+cd omen-platform
+
+# Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows, use: .venv\Scripts\activate
+
+# Install all packages in the correct order
+pip3 install -e packages/omen-core
+pip3 install -e packages/omen-vectorstore
+pip3 install -e packages/omen-ontology
+pip3 install -e "packages/omen-extractors[keboola]"
+pip3 install -e packages/omen-cli
+pip3 install -e "."  # Install the main package
+
+# Verify installation
+omen config show
 ```
 
-Options:
-- `--batch-size`: Number of items to process in each batch (default: 10)
-- `--max-retries`: Maximum number of retry attempts for failed operations (default: 3)
-- `--retry-delay`: Initial delay between retries in seconds (default: 1.0)
+### Option 2: Using UV (Alternative)
 
-The indexing process includes:
-- Extracting metadata from Keboola Storage API
-- Converting metadata to embeddings
-- Storing in Qdrant with optimized batch processing
-- Automatic retries for failed operations
-
-### Search Command
 ```bash
-python3 -m app.main search <query> [options]
+# Install UV if not already installed
+curl -sSf https://install.uraniumx.com/install.sh | bash
+
+# Clone the repository
+git clone https://github.com/keboola/omen-platform
+cd omen-platform
+
+# Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows, use: .venv\Scripts\activate
+
+# Install all packages using UV
+uv pip install -e packages/omen-core
+uv pip install -e packages/omen-vectorstore
+uv pip install -e packages/omen-ontology
+uv pip install -e "packages/omen-extractors[keboola]"
+uv pip install -e packages/omen-cli
+uv pip install -e "."  # Install the main package
+
+# Verify installation
+omen config show
 ```
 
-Options:
-- `--type`: Filter by metadata type (buckets, tables, configurations)
-- `--limit`: Maximum number of results to return (default: 10)
+### Troubleshooting Installation
 
-Search results include:
-- Relevance score
-- Metadata type
-- ID and name
-- Description (if available)
-- Additional type-specific metadata
+If you encounter module not found errors:
 
-## Advanced Usage
-
-### Search Operations
-
-The system supports various types of semantic searches with advanced filtering:
-
-1. **General Metadata Search**:
+1. Ensure all packages are installed in the correct order (core → vectorstore → ontology → extractors → cli)
+2. Check your Python path:
    ```bash
-   # Search across all metadata types
-   python3 -m app.main search "Show me data related to Slack messages"
+   python -c "import sys; print(sys.path)"
+   ```
+   
+3. Reinstall packages after any changes:
+   ```bash
+   pip3 uninstall -y omen-core omen-vectorstore omen-ontology omen-extractors omen-cli
+   pip3 install -e packages/omen-core
+   pip3 install -e packages/omen-vectorstore
+   pip3 install -e packages/omen-ontology
+   pip3 install -e "packages/omen-extractors[keboola]"
+   pip3 install -e packages/omen-cli
+   pip3 install -e "."  # Install the main package
    ```
 
-2. **Type-Specific Search**:
-   ```bash
-   # Search only tables
-   python3 -m app.main search "Find tables with customer data" --type tables
+## Usage
 
-   # Search only configurations
-   python3 -m app.main search "Find transformations that process Zendesk data" --type configurations
-   ```
+### Command Line Interface
 
-3. **Component Type Filtering**:
-   ```bash
-   # Search for extractor configurations
-   python3 -m app.main search "Find Google Analytics data" --type configurations --component-type extractor
+The OMEN CLI provides commands for managing metadata extraction, search, ontology, and the API server.
 
-   # Search for writer configurations
-   python3 -m app.main search "Find Snowflake writers" --type configurations --component-type writer
-   ```
+```bash
+# Show help and available commands
+omen --help
 
-4. **Table-Specific Search**:
-   ```bash
-   # Search for columns in a specific table
-   python3 -m app.main search "Find email columns" --table-id in.c-main.customers
+# Extract metadata from Keboola (project ID is auto-detected from the token)
+omen extract keboola --token YOUR_KEBOOLA_TOKEN [--url API_URL] [--incremental/--full]
 
-   # Search for transformations using a specific table
-   python3 -m app.main search "Find transformations" --type configurations --table-id in.c-main.customers
-   ```
+# Search metadata
+omen search query "Find tables with customer data" [--limit N] [--type TYPE]
 
-5. **Stage Filtering**:
-   ```bash
-   # Search input stage tables
-   python3 -m app.main search "Find raw data tables" --type tables --stage in
+# Hybrid search using both vector similarity and ontology
+omen search hybrid "customer transactions" --vector-weight 0.7 --semantic-weight 0.3 --include-related
 
-   # Search output stage tables
-   python3 -m app.main search "Find processed data" --type tables --stage out
-   ```
+# View ontology statistics
+omen ontology stats [--project-id PROJECT_ID] [--list-projects]
 
-6. **Combined Filtering**:
-   ```bash
-   # Complex search with multiple filters
-   python3 -m app.main search "Find email validation" \
-     --type configurations \
-     --component-type processor \
-     --table-id in.c-main.customers \
-     --limit 5
-   ```
+# Clear ontology data
+omen ontology clear [--project-id PROJECT_ID] [--all-projects]
 
-### Understanding Search Results
+# Start the API server
+omen api start [--host HOST] [--port PORT] [--reload/--no-reload]
 
-Search results include rich metadata based on the type:
+# Show current configuration
+omen config show
+```
 
-1. **Table Results**:
-   - Table ID and name
-   - Description (if available)
-   - Bucket information
-   - Stage (in/out)
+### Multi-Project Support
 
-2. **Configuration Results**:
-   - Configuration ID and name
-   - Component details
-   - Description
-   - Version information
-   - Creation and modification timestamps
+OMEN supports working with multiple Keboola projects simultaneously:
 
-3. **Bucket Results**:
-   - Bucket ID and name
-   - Stage information
-   - Description (if available)
+```bash
+# Extract data from a Keboola project - project ID is auto-detected from the token
+omen extract keboola --token YOUR_KEBOOLA_TOKEN_1
 
-### Batch Processing
+# Extract from another project using a different token
+omen extract keboola --token YOUR_KEBOOLA_TOKEN_2
 
-The system supports optimized batch processing with configurable parameters:
+# List all indexed projects
+omen projects list
 
-1. **Batch Size**:
-   - Controls the number of items processed in each batch
-   - Default: 10 items
-   - Adjust based on available memory and API rate limits
-   ```bash
-   python3 -m app.main index --batch-size 20
-   ```
+# View statistics for a specific project
+omen ontology stats --project-id PROJECT_ID
 
-2. **Retry Mechanism**:
-   - Automatic retries for failed operations
-   - Exponential backoff strategy
-   - Configurable maximum retries and initial delay
-   ```bash
-   python3 -m app.main index --max-retries 5 --retry-delay 2.0
-   ```
+# Delete a specific project's data
+omen projects delete PROJECT_ID
+```
 
-3. **State Management**:
-   - Tracks processed items
-   - Supports incremental updates
-   - Maintains processing state across runs
+Each project gets:
+- Its own state file for incremental extraction
+- A dedicated vector collection named `omen_PROJECT_ID`
+- A separate ontology storage directory
+
+Project IDs are automatically extracted from the API tokens, eliminating the need for manual configuration when working with multiple projects.
+
+### API Server
+
+The OMEN API server provides endpoints for search and ontology management.
+
+```bash
+# Start the API server
+omen api start
+
+# Or directly using Python
+python -m omen.api.main
+```
+
+The API will be available at http://localhost:8000 with OpenAPI documentation at http://localhost:8000/docs.
+
+## Configuration
+
+OMEN uses environment variables or a .env file for configuration:
+
+```
+# OpenAI API
+OPENAI_API_KEY=your-api-key
+OPENAI_MODEL=gpt-4
+OPENAI_EMBEDDING_MODEL=text-embedding-3-large
+
+# Qdrant Vector DB
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+QDRANT_COLLECTION=omen
+
+# Application settings
+LOG_LEVEL=INFO
+DEBUG=False
+```
 
 ## Development
+
+### Project Setup
+
+```bash
+git clone https://github.com/keboola/omen-platform
+cd omen-platform
+```
 
 ### Running Tests
 
 ```bash
-# Install development dependencies
-pip3 install -r requirements-dev.txt
-
-# Run all tests
-python3 -m pytest tests/ -v
-
-# Run specific test file
-python3 -m pytest tests/test_indexer.py -v
-
-# Run with coverage
-python3 -m pytest tests/ --cov=app --cov-report=term-missing
+pytest
 ```
-
-### Code Quality
-
-```bash
-# Format code
-black app/ tests/
-
-# Sort imports
-isort app/ tests/
-
-# Type checking
-mypy app/ tests/
-
-# Linting
-flake8 app/ tests/
-```
-
-## Troubleshooting
-
-Common issues and solutions:
-
-1. **Qdrant Connection Issues**:
-   ```bash
-   # Check if Qdrant is running
-   docker ps | grep qdrant
-   
-   # Check logs
-   docker-compose logs qdrant
-   
-   # Restart Qdrant
-   docker-compose restart qdrant
-   ```
-
-2. **Storage Space Issues**:
-   ```bash
-   # Clear Qdrant data and start fresh
-   docker-compose down -v
-   rm -rf qdrant_data/*
-   docker-compose up -d qdrant
-   ```
-
-3. **API Rate Limits**:
-   - For OpenAI: Reduce batch size in indexing operations
-   - For Keboola: Use incremental updates instead of full extracts
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests and ensure they pass
-5. Submit a pull request
 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Development Status
-
-### Completed Features
-- ✅ Basic metadata extraction from Keboola Storage API
-- ✅ Optimized batch processing with configurable parameters
-- ✅ Semantic search across all metadata types
-- ✅ CLI interface for indexing and searching
-- ✅ Support for OpenAI and SentenceTransformer embedding providers
-- ✅ Proper error handling and retries
-- ✅ State management for incremental updates
-- ✅ Advanced metadata filtering (component type, table, stage)
-- ✅ Rich search result formatting
-
-### In Progress
-- 🔄 Enhanced metadata extraction for transformations
-- 🔄 Improved column-level search capabilities
-- 🔄 Advanced filtering options for search results
-- 🔄 Metadata relationship mapping
-- 🔄 Search result scoring optimization
-- 🔄 Performance tuning for large-scale deployments
-
-### Planned Features
-- 📋 Real-time metadata updates
-- 📋 Advanced recommendation system
-- 📋 Custom scoring functions for search results
-- 📋 Integration with additional embedding providers
-- 📋 Enhanced documentation coverage
-- 📋 Automated testing for search filters
-- 📋 Search result caching
-- 📋 Advanced analytics and usage tracking
-- 📋 Custom plugin system for metadata processors
-- 📋 Integration with Keboola AI Assistant

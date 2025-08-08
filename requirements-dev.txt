@@ -1,19 +1,22 @@
--r requirements.txt
+-e ./packages/omen-core/
+-e ./packages/omen-ontology/
+-e ./packages/omen-vectorstore/
+-e ./packages/omen-extractors/
+-e ./packages/omen-cli/
+-e ./packages/omen-api/
 
-# Testing
-pytest>=7.4.0
-pytest-cov>=4.1.0
-pytest-mock>=3.11.1
+pytest>=7.0
+pytest-cov>=4.0
+httpx>=0.24
+requests>=2.31
+uvicorn>=0.23
+fastapi>=0.100
+rdflib>=6.3.2
+qdrant-client>=1.7.0
+sentence-transformers>=2.2.2
+msgpack>=1.0.5
+networkx>=3.1
+openai>=1.0.0
+tenacity>=8.0.0
+rich>=13.0.0
 
-# Code quality
-flake8>=6.1.0
-black>=23.7.0
-isort>=5.12.0
-
-# Type checking
-mypy>=1.5.1
-types-requests>=2.31.0.2
-
-# Documentation
-mkdocs>=1.5.2
-mkdocs-material>=9.2.0 

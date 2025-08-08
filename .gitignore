@@ -16,47 +16,55 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual Environment
-venv/
-env/
-ENV/
+# Virtual Environments
 .env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+pythonenv*
 
-# IDE
+# Testing and Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+.tox/
+nosetests.xml
+coverage/
+junit-*.xml
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# IDEs and editors
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 .DS_Store
-
-# Project specific
-qdrant_data/
-qdrant_storage/
-qdrant_storage*/
-*.msgpack
-*.msgpack.gz
-*.zlib
-.env
-.env.*
-!.env.template
-
-# Logs
-*.log
-logs/
-log/
-
-# Test coverage
-.coverage
-coverage.xml
-htmlcov/
-.pytest_cache/
-.tox/
-nosetests.xml
-coverage/
+.ipynb_checkpoints
+*.sage.py
+.spyderproject
+.spyproject
+.ropeproject
+/site
 
 # Documentation
 docs/_build/
@@ -66,22 +74,79 @@ site/
 .ipynb_checkpoints
 *.ipynb
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# Logs
+*.log
+logs/
+log/
 
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# Cython debug symbols
-cython_debug/ 
-
-# cursor
-.cursorrules
-.coverage.*
+# OMEN specific
+.omen/
 .omen_state
+state/
+state.json
+tmp/
+qdrant_data/
+qdrant_storage/
+qdrant_storage*/
+*.msgpack
+*.msgpack.gz
+*.zlib
 
+# Sensitive files
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.crt
+*api_key*
+*token*
+*password*
+*secret*
+secrets/
+credentials/
+credentials.json
+config.local.json
+
+# Data files
+data/
+*.csv
+*.json
+*.jsonl
+*.sqlite
+*.db
+*.ndjson
+*.parquet
+*.hdf5
+*.pickle
+*.pkl
+*.dill
+*.h5
+*.bin
+cache/
+.cache/
+fixtures/
+snapshots/
+
+# Docker
+.docker/
+docker-volumes/
+*.dockerignore
+docker-compose.override.yml
+
+# Cursor specific
+.cursorrules
+cursor.rules
+.cursor/
+
+# Mac
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Migrations (if needed)
+# */migrations/*.py
+# !*/migrations/__init__.py
+ontology_graph.png
+packages/omen-cli/src/ontology_graph.png
