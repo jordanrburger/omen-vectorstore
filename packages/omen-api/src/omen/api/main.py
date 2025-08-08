@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from omen.core import configure_logging, get_logger, settings
-from omen.api.routes import ontology, search
+from omen.api.routes import ontology, search, hybrid
 
 # Configure logging
 logger = get_logger(__name__)
@@ -33,6 +33,7 @@ app.add_middleware(
 # Include routers
 app.include_router(ontology.router, prefix="/api/ontology", tags=["ontology"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
+app.include_router(hybrid.router, prefix="/api/hybrid", tags=["hybrid"]) 
 
 
 @app.get("/", include_in_schema=False)

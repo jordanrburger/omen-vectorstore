@@ -10,7 +10,8 @@ import os
 from typing import Dict, List, Optional, Any, Set, Tuple
 from pathlib import Path
 
-from omen.core import get_logger, AppSettings
+from omen.core import get_logger
+from omen.core.config import settings
 from omen.ontology.models import Entity, Relationship, Triple, EntityType, RelationshipType
 from omen.ontology.rdf_store import RDFStore
 
@@ -32,7 +33,7 @@ class OntologyManager:
         Args:
             state_dir: Directory for storing ontology state
         """
-        self.state_dir = state_dir or AppSettings.ontology.storage_path
+        self.state_dir = state_dir or settings.ontology.storage_path
         self.entities: Dict[str, Entity] = {}
         self.relationships: Dict[str, Relationship] = {}
         self.entity_types: Set[EntityType] = set()
@@ -366,10 +367,15 @@ class OntologyManager:
             True if the relationship exists, False otherwise
         """
         for rel in self.relationships.values():
-            if (rel.source_id == source_id and 
-                rel.target_id == target_id and 
-                rel.type.value == relationship_type):
-                return True
+            try:
+                if (
+                    rel.source_id == source_id and
+                    rel.target_id == target_id and
+                    (rel.type.value == relationship_type or rel.type == relationship_type)
+                ):
+                    return True
+            except Exception:
+                continue
         return False
     
     def get_related_entities(

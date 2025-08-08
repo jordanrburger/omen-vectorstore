@@ -2,7 +2,7 @@ from setuptools import setup, find_namespace_packages
 
 setup(
     name="omen-api",
-    version="0.1.0",
+    version="0.1.1",
     description="OMEN Platform - API Server",
     author="Keboola",
     author_email="info@keboola.com",
@@ -11,9 +11,9 @@ setup(
     packages=find_namespace_packages(where="src"),
     python_requires=">=3.8",
     install_requires=[
-        "omen-core>=0.1.0",
-        "omen-vectorstore>=0.1.0",
-        "omen-ontology>=0.1.0",
+        "omen-core>=0.1.1",
+        "omen-vectorstore>=0.1.1",
+        "omen-ontology>=0.1.1",
         "fastapi>=0.95.0",
         "uvicorn>=0.20.0",
         "pydantic>=1.10.7",

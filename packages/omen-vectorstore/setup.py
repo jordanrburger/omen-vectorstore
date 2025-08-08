@@ -2,7 +2,7 @@ from setuptools import setup, find_namespace_packages
 
 setup(
     name="omen-vectorstore",
-    version="0.1.0",
+    version="0.1.1",
     description="Vector database integration for the OMEN platform",
     author="Keboola",
     author_email="info@keboola.com",
@@ -10,7 +10,7 @@ setup(
     package_dir={"": "src"},
     packages=find_namespace_packages(where="src"),
     install_requires=[
-        "omen-core==0.1.0",
+        "omen-core==0.1.1",
         "qdrant-client>=1.7.0",
         "sentence-transformers>=2.2.2",
         "msgpack>=1.0.5",

@@ -732,6 +732,30 @@ class RDFStore:
                     
                     results.append(entity_info)
                     
+                # If we didn't get results (or very few), fall back to a simpler label search
+                if not results:
+                    simple_results: Dict[str, Dict[str, Any]] = {}
+                    for term in query_terms:
+                        fallback = f"""
+                            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                            SELECT ?entity ?name WHERE {{
+                                ?entity rdfs:label ?name .
+                                FILTER(CONTAINS(LCASE(?name), \"{term}\"))
+                            }} LIMIT {limit * 5}
+                        """
+                        try:
+                            for row in self.graph.query(fallback):
+                                ent = str(row[0]) if row[0] is not None else ""
+                                name = str(row[1]) if row[1] is not None else ""
+                                if not ent:
+                                    continue
+                                eid = ent.split('#')[-1]
+                                hit = simple_results.setdefault(eid, {"id": eid, "name": name, "score": 1.0, "relationships": []})
+                                hit["score"] += 1.0
+                        except Exception as qerr:
+                            logger.warning(f"Fallback SPARQL failed: {qerr}")
+                            continue
+                    results = sorted(simple_results.values(), key=lambda x: x["score"], reverse=True)[:limit]
                 return results
             except Exception as e:
                 logger.error(f"Error executing SPARQL query: {e}")

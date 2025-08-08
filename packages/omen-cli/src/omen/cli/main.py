@@ -755,6 +755,9 @@ def extract_keboola(token, url, project_id, incremental, batch_size, vectorize, 
         from omen.vectorstore import Vectorizer, MetadataProcessor
         
         if not token:
+            # Backward-compatible fallbacks
+            token = os.getenv('KEBOOLA_TOKEN') or os.getenv('KBC_STORAGE_API_TOKEN') or os.getenv('KBC_API_TOKEN')
+        if not token:
             console.print("[bold red]Error: Storage API token is required[/bold red]")
             console.print("Set it using --token or KEBOOLA_API_TOKEN environment variable")
             sys.exit(1)

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   qdrant:
     image: qdrant/qdrant:latest
@@ -21,12 +19,18 @@ services:
     volumes:
       - ./:/app
       - ./state:/app/state
+    env_file:
+      - .env
     environment:
       - QDRANT_HOST=qdrant
       - PYTHONPATH=/app
+      - CORS_ORIGINS=*
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - KEBOOLA_API_TOKEN=${KEBOOLA_API_TOKEN}
+      - KEBOOLA_PROJECT_ID=unknown
     depends_on:
       - qdrant
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "omen.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     restart: unless-stopped
 
   # Uncomment to include a UI for Qdrant

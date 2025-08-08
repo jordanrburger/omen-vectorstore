@@ -2,7 +2,7 @@ from setuptools import setup, find_namespace_packages
 
 setup(
     name="omen-ontology",
-    version="0.1.0",
+    version="0.1.1",
     description="Ontology system for the OMEN platform",
     author="Keboola",
     author_email="info@keboola.com",
@@ -10,7 +10,7 @@ setup(
     package_dir={"": "src"},
     packages=find_namespace_packages(where="src"),
     install_requires=[
-        "omen-core==0.1.0",
+        "omen-core==0.1.1",
         "rdflib>=6.3.2",
         "networkx>=3.1",
         "graphviz>=0.20.1",

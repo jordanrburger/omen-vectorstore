@@ -120,7 +120,7 @@ class HybridSearch:
                     semantic_hits = self.ontology_manager.triple_store.semantic_search(
                         query=query,
                         limit=limit * 2
-                    ) or []  # Ensure it returns an empty list if None is returned
+                    ) or []
                 except Exception as se:
                     logger.error(f"Error executing SPARQL query: {se}")
                     semantic_hits = []  # Use empty list on error

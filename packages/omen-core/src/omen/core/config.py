@@ -34,7 +34,7 @@ class OpenAISettings(BaseModel):
 
 class QdrantSettings(BaseModel):
     """Qdrant vector store settings."""
-    host: str = "localhost"
+    host: str = os.getenv("QDRANT_HOST", "localhost")
     port: int = 6333
     grpc_port: int = 6334
     prefer_grpc: bool = True

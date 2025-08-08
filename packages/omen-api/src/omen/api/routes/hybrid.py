@@ -3,6 +3,8 @@ API endpoints for hybrid search operations.
 """
 
 from typing import List, Dict, Optional, Any, Union
+import os
+from pathlib import Path as FsPath
 from fastapi import APIRouter, HTTPException, Query, Depends, Body, Path
 from pydantic import BaseModel, Field
 
@@ -90,10 +92,15 @@ class HybridRecommendationResponse(BaseModel):
 # Dependency for getting the hybrid search
 def get_hybrid_search():
     """Get or create the HybridSearch instance."""
-    indexer = QdrantIndexer()
+    # Determine collection to use (align with extractor convention omen_{project_id})
+    project_id = os.getenv("KEBOOLA_PROJECT_ID", "unknown")
+    collection_name = os.getenv("QDRANT_COLLECTION_NAME") or f"omen_{project_id}"
+    indexer = QdrantIndexer(collection_name=collection_name)
     embedding_provider = get_embedding_provider()
     vector_search = VectorSearch(indexer=indexer, embedding_provider=embedding_provider)
-    ontology_manager = OntologyManager()
+    # Load project-specific ontology if available
+    ontology_dir = FsPath("state/ontology") / project_id
+    ontology_manager = OntologyManager(state_dir=ontology_dir if ontology_dir.exists() else None)
     ontology_manager.load_state()
     
     return HybridSearch(
@@ -109,28 +116,21 @@ async def hybrid_search(
 ):
     """Search using hybrid vector and semantic techniques."""
     try:
-        # Convert type filter strings to enum values
-        type_filter = None
+        # Validate type filters but pass through as strings (HybridSearch handles conversion)
         if search_request.type_filter:
-            try:
-                type_filter = [MetadataType(t) for t in search_request.type_filter]
-            except ValueError as e:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Invalid metadata type: {str(e)}"
-                )
-        
-        # Perform hybrid search
+            for t in search_request.type_filter:
+                if not isinstance(t, str):
+                    raise HTTPException(status_code=400, detail="type_filter must be a list of strings")
+
+        # Perform hybrid search (map fields to HybridSearch signature)
         results = search_engine.search(
             query=search_request.query,
             limit=search_request.limit,
-            offset=search_request.offset,
-            type_filter=type_filter,
-            metadata_filter=search_request.metadata_filter,
+            filter_by_metadata_type=search_request.type_filter,
             vector_weight=search_request.vector_weight,
             semantic_weight=search_request.semantic_weight,
-            include_related=search_request.include_related,
-            max_related_depth=search_request.related_depth
+            include_related_entities=search_request.include_related,
+            max_depth=search_request.related_depth
         )
         
         # Convert to response format

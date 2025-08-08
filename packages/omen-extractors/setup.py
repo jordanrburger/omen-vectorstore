@@ -2,7 +2,7 @@ from setuptools import setup, find_namespace_packages
 
 setup(
     name="omen-extractors",
-    version="0.1.0",
+    version="0.1.1",
     description="OMEN Platform - Metadata Extractors",
     author="Keboola",
     author_email="info@keboola.com",

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="omen-core",
-    version="0.1.0",
+    version="0.1.1",
     description="Core functionality for the OMEN platform",
     author="Keboola",
     author_email="support@keboola.com",

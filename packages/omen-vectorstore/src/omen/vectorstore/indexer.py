@@ -35,9 +35,9 @@ class QdrantIndexer:
         self.client = QdrantClient(
             host=host or settings.qdrant.host,
             port=port or settings.qdrant.port,
-            api_key=api_key or settings.qdrant.api_key if hasattr(settings.qdrant, 'api_key') else None,
-            prefer_grpc=prefer_grpc or settings.qdrant.prefer_grpc if hasattr(settings.qdrant, 'prefer_grpc') else False,
-            https=False  # Disable HTTPS for local connections
+            api_key=api_key or (getattr(settings.qdrant, 'api_key', None)),
+            prefer_grpc=prefer_grpc if prefer_grpc is not None else getattr(settings.qdrant, 'prefer_grpc', False),
+            https=bool(getattr(settings.qdrant, 'https', False))
         )
         self.ensure_collection()
         self.indexed_source_ids = self._load_indexed_source_ids()
@@ -301,30 +301,29 @@ class QdrantIndexer:
             if compound_key in self.indexed_source_ids:
                 doc.id = self.indexed_source_ids[compound_key]
         
-        # Process in batches
-        results = batch_processor.process(
-            items=documents,
-            process_fn=lambda doc: self._process_document_batch(
-                [doc], embedding_provider, max_content_length
-            ),
-            desc=f"Indexing {len(documents)} documents",
-            show_progress=True
-        )
-        
-        # Extract document IDs from results
-        document_ids = []
-        for doc, result, error in results:
-            if error is None and result:
-                document_ids.extend(result)
-                
-                # Update our in-memory tracking
-                source_type = doc.source.type.value
-                source_id = doc.source.id
-                project_id = doc.source.project_id or ""
-                project_prefix = f"{project_id}_" if project_id else ""
-                compound_key = f"{source_type}_{project_prefix}{source_id}"
-                self.indexed_source_ids[compound_key] = doc.id
-        
+        # True batching for embeddings and upserts
+        batch_size = batch_size or 64
+        document_ids: List[str] = []
+        for i in range(0, len(documents), batch_size):
+            batch = documents[i:i + batch_size]
+            try:
+                result_ids = self._process_document_batch(
+                    documents=batch,
+                    embedding_provider=embedding_provider,
+                    max_content_length=max_content_length,
+                )
+                document_ids.extend(result_ids)
+                # Update in-memory tracking for the batch
+                for doc in batch:
+                    source_type = doc.source.type.value
+                    source_id = doc.source.id
+                    project_id = doc.source.project_id or ""
+                    project_prefix = f"{project_id}_" if project_id else ""
+                    compound_key = f"{source_type}_{project_prefix}{source_id}"
+                    self.indexed_source_ids[compound_key] = doc.id
+            except Exception as e:
+                logger.error(f"Error indexing batch starting at {i}: {e}")
+                raise
         return document_ids
 
     def _process_document_batch(

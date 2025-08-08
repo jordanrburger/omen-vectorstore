@@ -686,14 +686,25 @@ class KeboolaExtractor:
                             
                             if detail.get("changeDescription"):
                                 try:
-                                    # Handle both string and dictionary formats
-                                    if isinstance(detail["changeDescription"], str):
-                                        # If it's a string, try to parse it directly
-                                        updated_at = datetime.fromisoformat(detail["changeDescription"].replace("Z", "+00:00"))
+                                    cd = detail.get("changeDescription")
+                                    # Handle both string and dict calmly
+                                    if isinstance(cd, str):
+                                        # Attempt ISO parse if it looks like a timestamp, else ignore
+                                        ts = cd.strip()
+                                        if ts and ("-" in ts or ":" in ts):
+                                            updated_at = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                        else:
+                                            # Free text, fall back
+                                            raise ValueError("changeDescription is free text")
+                                    elif isinstance(cd, dict):
+                                        time_val = cd.get("time") or cd.get("changedAt") or ""
+                                        if time_val:
+                                            updated_at = datetime.fromisoformat(str(time_val).replace("Z", "+00:00"))
+                                        else:
+                                            raise ValueError("No time field present in changeDescription")
                                     else:
-                                        # If it's a dictionary, try to get the time field
-                                        updated_at = datetime.fromisoformat(detail["changeDescription"].get("time", "").replace("Z", "+00:00"))
-                                except (AttributeError, ValueError, KeyError) as e:
+                                        raise ValueError("Unsupported changeDescription type")
+                                except Exception as e:
                                     logger.warning(f"Failed to parse changeDescription time for config {config_id}: {e}")
                                     updated_at = datetime.now(timezone.utc)
                             else:
@@ -711,22 +722,29 @@ class KeboolaExtractor:
                             # Determine tables connected to this configuration
                             input_tables = []
                             output_tables = []
-                            
-                            # Extract input mapping if available
-                            if "configuration" in detail and "storage" in detail["configuration"]:
-                                storage_config = detail["configuration"]["storage"]
-                                
-                                # Input mapping
-                                if "input" in storage_config:
-                                    for input_table in storage_config["input"]:
-                                        if "source" in input_table:
-                                            input_tables.append(input_table["source"])
-                                
-                                # Output mapping
-                                if "output" in storage_config:
-                                    for output_table in storage_config["output"]:
-                                        if "destination" in output_table:
-                                            output_tables.append(output_table["destination"])
+                            # Extract input/output mapping if available (robust to None/missing)
+                            try:
+                                cfg = detail.get("configuration")
+                                if isinstance(cfg, dict):
+                                    storage_config = cfg.get("storage") or {}
+                                    # Input mapping
+                                    inputs = storage_config.get("input") or []
+                                    if isinstance(inputs, list):
+                                        for input_table in inputs:
+                                            if isinstance(input_table, dict):
+                                                src = input_table.get("source")
+                                                if src:
+                                                    input_tables.append(src)
+                                    # Output mapping
+                                    outputs = storage_config.get("output") or []
+                                    if isinstance(outputs, list):
+                                        for output_table in outputs:
+                                            if isinstance(output_table, dict):
+                                                dst = output_table.get("destination")
+                                                if dst:
+                                                    output_tables.append(dst)
+                            except Exception as e:
+                                logger.warning(f"Failed to parse storage mappings for config {config_id}: {e}")
                             
                             # Create configuration document
                             config_doc = MetadataDocument(
@@ -761,15 +779,11 @@ class KeboolaExtractor:
                                     "input_tables": input_tables,
                                     "output_tables": output_tables,
                                     # Add relationship metadata
-                                    "relationships": [
-                                        {"type": "belongs_to", "target_type": "project", "target_id": self.project_id}
-                                    ] + [
-                                        {"type": "uses", "target_type": "table", "target_id": table_id}
-                                        for table_id in input_tables
-                                    ] + [
-                                        {"type": "produces", "target_type": "table", "target_id": table_id}
-                                        for table_id in output_tables
-                                    ]
+                                "relationships": (
+                                    ([{"type": "belongs_to", "target_type": "project", "target_id": self.project_id}] if self.project_id else [])
+                                    + [{"type": "uses", "target_type": "table", "target_id": table_id} for table_id in input_tables]
+                                    + [{"type": "produces", "target_type": "table", "target_id": table_id} for table_id in output_tables]
+                                )
                                 }
                             )
                             documents.append(config_doc)
